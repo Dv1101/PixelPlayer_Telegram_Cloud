@@ -7,6 +7,7 @@ plugins {
     alias(libs.plugins.jetbrains.kotlin.android)
     alias(libs.plugins.baselineprofile)
     // id("com.google.protobuf") version "0.9.5" // Eliminado plugin de Protobuf
+    id("kotlin-parcelize")
 }
 
 android {
@@ -93,6 +94,7 @@ android {
 
 dependencies {
     implementation(libs.androidx.profileinstaller)
+    implementation(libs.androidx.paging.common)
     "baselineProfile"(project(":baselineprofile"))
     coreLibraryDesugaring(libs.desugar.jdk.libs)
 
@@ -136,6 +138,11 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     ksp(libs.androidx.room.compiler)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.room.paging)
+    
+    // Paging 3
+    implementation(libs.androidx.paging.runtime)
+    implementation(libs.androidx.paging.compose)
 
     // Glance
     implementation(libs.androidx.glance)
@@ -152,7 +159,7 @@ dependencies {
     implementation(libs.androidx.work.runtime.ktx)
 
     //Duktape
-    implementation(libs.duktape.android)
+    // implementation(libs.duktape.android)
 
     //Smooth corners shape
     implementation(libs.smooth.corner.rect.android.compose)
@@ -276,6 +283,8 @@ dependencies {
     implementation(libs.androidx.app)
     implementation(libs.androidx.app.projected)
 
+    // Telegram TDLib
+    implementation(libs.tdlib)
 }
 
 

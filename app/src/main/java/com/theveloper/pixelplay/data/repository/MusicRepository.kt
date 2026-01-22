@@ -1,6 +1,7 @@
 package com.theveloper.pixelplay.data.repository
 
 import android.net.Uri
+import androidx.paging.PagingData
 import com.theveloper.pixelplay.data.model.Album
 import com.theveloper.pixelplay.data.model.Artist
 import com.theveloper.pixelplay.data.model.Lyrics
@@ -11,6 +12,7 @@ import com.theveloper.pixelplay.data.model.SearchHistoryItem
 import com.theveloper.pixelplay.data.model.SearchResultItem
 import com.theveloper.pixelplay.data.model.Song
 import kotlinx.coroutines.flow.Flow
+import com.theveloper.pixelplay.data.database.TelegramChannelEntity
 
 interface MusicRepository {
     /**
@@ -18,6 +20,26 @@ interface MusicRepository {
      * @return Flow que emite una lista completa de objetos Song.
      */
     fun getAudioFiles(): Flow<List<Song>> // Existing Flow for reactive updates
+    
+    /**
+     * Returns paginated songs for efficient display of large libraries.
+     * @return Flow of PagingData<Song> for use with LazyPagingItems.
+     */
+    fun getPaginatedSongs(): Flow<PagingData<Song>>
+
+    /**
+     * Returns the count of songs in the library.
+     * @return Flow emitting the current song count.
+     */
+    fun getSongCountFlow(): Flow<Int>
+
+    /**
+     * Returns a random selection of songs for efficient shuffle.
+     * Uses database-level RANDOM() for performance.
+     * @param limit Maximum number of songs to return.
+     * @return List of randomly selected songs.
+     */
+    suspend fun getRandomSongs(limit: Int): List<Song>
 
     /**
      * Obtiene la lista de álbumes filtrada.
@@ -169,4 +191,12 @@ interface MusicRepository {
     fun getMusicFolders(): Flow<List<com.theveloper.pixelplay.data.model.MusicFolder>>
 
     suspend fun deleteById(id: Long)
+    
+    suspend fun saveTelegramSongs(songs: List<Song>)
+    
+    suspend fun clearTelegramData()
+
+    suspend fun saveTelegramChannel(channel: TelegramChannelEntity)
+    fun getAllTelegramChannels(): Flow<List<TelegramChannelEntity>>
+    suspend fun deleteTelegramChannel(chatId: Long)
 }

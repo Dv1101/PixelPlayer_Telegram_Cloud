@@ -43,6 +43,7 @@ data class SettingsUiState(
     val showQueueHistory: Boolean = true,
     val isCrossfadeEnabled: Boolean = true,
     val crossfadeDuration: Int = 6000,
+    val persistentShuffleEnabled: Boolean = false,
     val lyricsSourcePreference: LyricsSourcePreference = LyricsSourcePreference.EMBEDDED_FIRST,
     val autoScanLrcFiles: Boolean = false,
     val blockedDirectories: Set<String> = emptySet(),
@@ -71,6 +72,33 @@ data class LyricsRefreshProgress(
     val hasProgress: Boolean get() = totalSongs > 0
     val progress: Float get() = if (totalSongs > 0) currentCount.toFloat() / totalSongs else 0f
     val hasFailedSongs: Boolean get() = failedSongs.isNotEmpty()
+}
+
+// Helper classes for consolidated combine() collectors to reduce coroutine overhead
+private sealed interface SettingsUiUpdate {
+    data class Group1(
+        val appRebrandDialogShown: Boolean,
+        val appThemeMode: String,
+        val playerThemePreference: String,
+        val mockGenresEnabled: Boolean,
+        val navBarCornerRadius: Int,
+        val navBarStyle: String,
+        val libraryNavigationMode: String,
+        val carouselStyle: String,
+        val launchTab: String
+    ) : SettingsUiUpdate
+    
+    data class Group2(
+        val keepPlayingInBackground: Boolean,
+        val disableCastAutoplay: Boolean,
+        val showQueueHistory: Boolean,
+        val isCrossfadeEnabled: Boolean,
+        val crossfadeDuration: Int,
+        val persistentShuffleEnabled: Boolean,
+        val lyricsSourcePreference: LyricsSourcePreference,
+        val autoScanLrcFiles: Boolean,
+        val blockedDirectories: Set<String>
+    ) : SettingsUiUpdate
 }
 
 @HiltViewModel
@@ -121,108 +149,92 @@ class SettingsViewModel @Inject constructor(
         )
 
     init {
+        // Consolidated collectors using combine() to reduce coroutine overhead
+        // Instead of 20 separate coroutines, we use 2 combined flows
+        
+        // Group 1: Core UI settings (theme, navigation, appearance)
         viewModelScope.launch {
-            userPreferencesRepository.appRebrandDialogShownFlow.collect { wasShown ->
-                _uiState.update { it.copy(appRebrandDialogShown = wasShown) }
+            combine(
+                userPreferencesRepository.appRebrandDialogShownFlow,
+                userPreferencesRepository.appThemeModeFlow,
+                userPreferencesRepository.playerThemePreferenceFlow,
+                userPreferencesRepository.mockGenresEnabledFlow,
+                userPreferencesRepository.navBarCornerRadiusFlow,
+                userPreferencesRepository.navBarStyleFlow,
+                userPreferencesRepository.libraryNavigationModeFlow,
+                userPreferencesRepository.carouselStyleFlow,
+                userPreferencesRepository.launchTabFlow
+            ) { values ->
+                SettingsUiUpdate.Group1(
+                    appRebrandDialogShown = values[0] as Boolean,
+                    appThemeMode = values[1] as String,
+                    playerThemePreference = values[2] as String,
+                    mockGenresEnabled = values[3] as Boolean,
+                    navBarCornerRadius = values[4] as Int,
+                    navBarStyle = values[5] as String,
+                    libraryNavigationMode = values[6] as String,
+                    carouselStyle = values[7] as String,
+                    launchTab = values[8] as String
+                )
+            }.collect { update ->
+                _uiState.update { state ->
+                    state.copy(
+                        appRebrandDialogShown = update.appRebrandDialogShown,
+                        appThemeMode = update.appThemeMode,
+                        playerThemePreference = update.playerThemePreference,
+                        mockGenresEnabled = update.mockGenresEnabled,
+                        navBarCornerRadius = update.navBarCornerRadius,
+                        navBarStyle = update.navBarStyle,
+                        libraryNavigationMode = update.libraryNavigationMode,
+                        carouselStyle = update.carouselStyle,
+                        launchTab = update.launchTab
+                    )
+                }
             }
         }
-
+        
+        // Group 2: Playback and system settings
         viewModelScope.launch {
-            userPreferencesRepository.appThemeModeFlow.collect { appThemeMode ->
-                _uiState.update { it.copy(appThemeMode = appThemeMode) }
+            combine(
+                userPreferencesRepository.keepPlayingInBackgroundFlow,
+                userPreferencesRepository.disableCastAutoplayFlow,
+                userPreferencesRepository.showQueueHistoryFlow,
+                userPreferencesRepository.isCrossfadeEnabledFlow,
+                userPreferencesRepository.crossfadeDurationFlow,
+                userPreferencesRepository.persistentShuffleEnabledFlow,
+                userPreferencesRepository.lyricsSourcePreferenceFlow,
+                userPreferencesRepository.autoScanLrcFilesFlow,
+                userPreferencesRepository.blockedDirectoriesFlow
+            ) { values ->
+                SettingsUiUpdate.Group2(
+                    keepPlayingInBackground = values[0] as Boolean,
+                    disableCastAutoplay = values[1] as Boolean,
+                    showQueueHistory = values[2] as Boolean,
+                    isCrossfadeEnabled = values[3] as Boolean,
+                    crossfadeDuration = values[4] as Int,
+                    persistentShuffleEnabled = values[5] as Boolean,
+                    lyricsSourcePreference = values[6] as LyricsSourcePreference,
+                    autoScanLrcFiles = values[7] as Boolean,
+                    blockedDirectories = @Suppress("UNCHECKED_CAST") (values[8] as Set<String>)
+                )
+            }.collect { update ->
+                _uiState.update { state ->
+                    state.copy(
+                        keepPlayingInBackground = update.keepPlayingInBackground,
+                        disableCastAutoplay = update.disableCastAutoplay,
+                        showQueueHistory = update.showQueueHistory,
+                        isCrossfadeEnabled = update.isCrossfadeEnabled,
+                        crossfadeDuration = update.crossfadeDuration,
+                        persistentShuffleEnabled = update.persistentShuffleEnabled,
+                        lyricsSourcePreference = update.lyricsSourcePreference,
+                        autoScanLrcFiles = update.autoScanLrcFiles,
+                        blockedDirectories = update.blockedDirectories
+                    )
+                }
             }
         }
-
-        viewModelScope.launch {
-            userPreferencesRepository.playerThemePreferenceFlow.collect { preference ->
-                _uiState.update{ it.copy(playerThemePreference = preference) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.mockGenresEnabledFlow.collect { enabled ->
-                _uiState.update { it.copy(mockGenresEnabled = enabled) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.navBarCornerRadiusFlow.collect { radius ->
-                _uiState.update { it.copy(navBarCornerRadius = radius) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.navBarStyleFlow.collect { style ->
-                _uiState.update { it.copy(navBarStyle = style) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.libraryNavigationModeFlow.collect { mode ->
-                _uiState.update { it.copy(libraryNavigationMode = mode) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.carouselStyleFlow.collect { style ->
-                _uiState.update { it.copy(carouselStyle = style) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.launchTabFlow.collect { tab ->
-                _uiState.update { it.copy(launchTab = tab) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.keepPlayingInBackgroundFlow.collect { enabled ->
-                _uiState.update { it.copy(keepPlayingInBackground = enabled) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.disableCastAutoplayFlow.collect { disabled ->
-                _uiState.update { it.copy(disableCastAutoplay = disabled) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.showQueueHistoryFlow.collect { show ->
-                _uiState.update { it.copy(showQueueHistory = show) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.isCrossfadeEnabledFlow.collect { enabled ->
-                _uiState.update { it.copy(isCrossfadeEnabled = enabled) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.crossfadeDurationFlow.collect { duration ->
-                _uiState.update { it.copy(crossfadeDuration = duration) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.lyricsSourcePreferenceFlow.collect { preference ->
-                _uiState.update { it.copy(lyricsSourcePreference = preference) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.autoScanLrcFilesFlow.collect { enabled ->
-                _uiState.update { it.copy(autoScanLrcFiles = enabled) }
-            }
-        }
-
-        viewModelScope.launch {
-            userPreferencesRepository.blockedDirectoriesFlow.collect { blocked ->
-                _uiState.update { it.copy(blockedDirectories = blocked) }
-            }
-        }
-
+        
+        // Group 3: Remaining individual collectors (loading state, tweaks)
         viewModelScope.launch {
             userPreferencesRepository.fullPlayerLoadingTweaksFlow.collect { tweaks ->
                 _uiState.update { it.copy(fullPlayerLoadingTweaks = tweaks) }
@@ -339,6 +351,12 @@ class SettingsViewModel @Inject constructor(
     fun setCrossfadeDuration(duration: Int) {
         viewModelScope.launch {
             userPreferencesRepository.setCrossfadeDuration(duration)
+        }
+    }
+
+    fun setPersistentShuffleEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setPersistentShuffleEnabled(enabled)
         }
     }
 

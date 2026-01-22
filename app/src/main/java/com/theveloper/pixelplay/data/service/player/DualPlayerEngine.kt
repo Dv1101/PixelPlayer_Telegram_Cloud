@@ -11,6 +11,15 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.MediaCodecAudioRenderer
+import androidx.media3.exoplayer.audio.AudioRendererEventListener
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.common.Format
+import androidx.media3.exoplayer.mediacodec.MediaCodecInfo
+import android.os.Handler
+import kotlin.math.max
 //import androidx.media3.exoplayer.ffmpeg.FfmpegAudioRenderer
 import com.theveloper.pixelplay.data.model.TransitionSettings
 import com.theveloper.pixelplay.utils.envelope
@@ -26,6 +35,14 @@ import kotlinx.coroutines.flow.asStateFlow // Added
 import javax.inject.Inject
 import javax.inject.Singleton
 
+import com.theveloper.pixelplay.data.telegram.TelegramRepository
+import androidx.media3.datasource.ResolvingDataSource
+import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import android.net.Uri
+import java.io.File
+
 /**
  * Manages two ExoPlayer instances (A and B) to enable seamless transitions.
  *
@@ -37,6 +54,9 @@ import javax.inject.Singleton
 @Singleton
 class DualPlayerEngine @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val telegramRepository: TelegramRepository,
+    private val telegramStreamProxy: com.theveloper.pixelplay.data.telegram.TelegramStreamProxy,
+    private val telegramCacheManager: com.theveloper.pixelplay.data.telegram.TelegramCacheManager
 ) {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var transitionJob: Job? = null
@@ -91,6 +111,46 @@ class DualPlayerEngine @Inject constructor(
                 if (!isFocusLossPause) {
                     abandonAudioFocus()
                 }
+            }
+        }
+        
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            // Track Telegram file for cache management
+            val uri = mediaItem?.localConfiguration?.uri
+            if (uri?.scheme == "telegram") {
+                val fileId = uri.host?.toIntOrNull()
+                telegramCacheManager.setActivePlayback(fileId)
+                Timber.tag("DualPlayerEngine").d("Telegram playback active: fileId=$fileId")
+            } else {
+                // Non-Telegram song - clean up any previous Telegram file
+                telegramCacheManager.setActivePlayback(null)
+            }
+
+            // --- Pre-Resolve Next/Prev Tracks for Performance ---
+            try {
+                // Use the current master player (playerA)
+                val currentIndex = playerA.currentMediaItemIndex
+                if (currentIndex != C.INDEX_UNSET) {
+                    // 1. Pre-resolve NEXT track
+                    if (currentIndex + 1 < playerA.mediaItemCount) {
+                        val nextItem = playerA.getMediaItemAt(currentIndex + 1)
+                        val nextUri = nextItem.localConfiguration?.uri
+                        if (nextUri?.scheme == "telegram") {
+                            telegramRepository.preResolveTelegramUri(nextUri.toString())
+                        }
+                    }
+                    // 2. Pre-resolve PREVIOUS track (for back button speed)
+                    if (currentIndex - 1 >= 0) {
+                        val prevItem = playerA.getMediaItemAt(currentIndex - 1)
+                        val prevUri = prevItem.localConfiguration?.uri
+                        if (prevUri?.scheme == "telegram") {
+                            telegramRepository.preResolveTelegramUri(prevUri.toString())
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Safeguard against any index/player state issues
+                Timber.w(e, "Error during pre-resolution in onMediaItemTransition")
             }
         }
     }
@@ -162,17 +222,124 @@ class DualPlayerEngine @Inject constructor(
     }
 
     private fun buildPlayer(handleAudioFocus: Boolean): ExoPlayer {
-        val renderersFactory = DefaultRenderersFactory(context)
-            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+        val renderersFactory = object : DefaultRenderersFactory(context) {
+            override fun buildAudioRenderers(
+                context: Context,
+                extensionRendererMode: Int,
+                mediaCodecSelector: MediaCodecSelector,
+                enableDecoderFallback: Boolean,
+                audioSink: AudioSink,
+                eventHandler: Handler,
+                eventListener: AudioRendererEventListener,
+                out: ArrayList<Renderer>
+            ) {
+                out.add(object : MediaCodecAudioRenderer(
+                    context,
+                    mediaCodecSelector,
+                    enableDecoderFallback,
+                    eventHandler,
+                    eventListener,
+                    audioSink
+                ) {
+                    override fun getCodecMaxInputSize(
+                        codecInfo: MediaCodecInfo,
+                        format: Format,
+                        streamFormats: Array<Format>
+                    ): Int {
+                        // Force minimum 512KB buffer for FLAC/High-res audio
+                        return max(super.getCodecMaxInputSize(codecInfo, format, streamFormats), 512 * 1024)
+                    }
+                })
+
+                super.buildAudioRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback, audioSink, eventHandler, eventListener, out)
+            }
+        }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
 
         val audioAttributes = AudioAttributes.Builder()
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
             .setUsage(C.USAGE_MEDIA)
             .build()
+            
+        val resolver = object : ResolvingDataSource.Resolver {
+            override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
+                 if (dataSpec.uri.scheme == "telegram") {
+                     var fileId: Int? = null
+                     var fileSize: Long = 0L
+                     
+                     // Check for New Scheme: telegram://chatId/messageId
+                     // We use runBlocking because resolveDataSpec is synchronous but we need to fetch info from TdLib
+                     val pathSegments = dataSpec.uri.pathSegments
+                     if (pathSegments.isNotEmpty()) {
+                         val uriString = dataSpec.uri.toString()
+                         val result = kotlinx.coroutines.runBlocking { 
+                             telegramRepository.resolveTelegramUri(uriString) 
+                         }
+                         fileId = result?.first
+                         fileSize = result?.second ?: 0L
+                     } else {
+                         // Fallback to Legacy Scheme: telegram://fileId (host)
+                         // Legacy scheme doesn't have size info, proxy will fallback to disk size
+                         fileId = dataSpec.uri.host?.toIntOrNull()
+                     }
 
-        return ExoPlayer.Builder(context, renderersFactory).build().apply {
+                     if (fileId != null) {
+                         Timber.tag("DualPlayerEngine").d("Resolving Telegram URI for fileId: $fileId...")
+                         
+                         // Fix: Check if file is already downloaded to use direct file access
+                         // This solves "plays fast" and skipping issues related to streaming completely downloaded files
+                         val fileInfo = kotlinx.coroutines.runBlocking {
+                             telegramRepository.getFile(fileId)
+                         }
+                         
+                         if (fileInfo?.local?.isDownloadingCompleted == true && fileInfo.local.path.isNotEmpty()) {
+                              Timber.tag("DualPlayerEngine").d("File $fileId is downloaded. Using direct file playback.")
+                              return dataSpec.buildUpon().setUri(android.net.Uri.fromFile(java.io.File(fileInfo.local.path))).build()
+                         }
+
+                         Timber.tag("DualPlayerEngine").d("File $fileId not downloaded or Check failed. Using StreamProxy.")
+
+                         // Wait for StreamProxy to be ready before getting proxy URL
+                         // This fixes playback failures when app restarts
+                         if (!telegramStreamProxy.isReady()) {
+                             Timber.tag("DualPlayerEngine").w("StreamProxy not ready, waiting...")
+                             val proxyReady = kotlinx.coroutines.runBlocking {
+                                 telegramStreamProxy.awaitReady(5_000L) // 5 second timeout
+                             }
+                             if (!proxyReady) {
+                                 Timber.tag("DualPlayerEngine").e("StreamProxy not ready after timeout - playback will fail")
+                                 // Return original dataSpec - will cause error but better than hanging
+                                 return dataSpec
+                             }
+                         }
+                         
+                         val proxyUrl = telegramStreamProxy.getProxyUrl(fileId, fileSize)
+                         if (proxyUrl.isNotEmpty()) {
+                             return dataSpec.buildUpon().setUri(android.net.Uri.parse(proxyUrl)).build()
+                         }
+                     }
+                 }
+                 return dataSpec
+            }
+        }
+        
+        val dataSourceFactory = DefaultDataSource.Factory(context)
+        val resolvingFactory = ResolvingDataSource.Factory(dataSourceFactory, resolver)
+
+//        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+//            .setBufferDurationsMs(
+//                30_000, // Min buffer 30s
+//                60_000, // Max buffer 60s
+//                5_000,  // Buffer for playback start (Aggressive: 5s)
+//                10_000  // Buffer for rebuffer (Aggressive: 10s)
+//            )
+//            .build()
+
+        return ExoPlayer.Builder(context, renderersFactory)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(resolvingFactory))
+            .build().apply {
             setAudioAttributes(audioAttributes, handleAudioFocus)
             setHandleAudioBecomingNoisy(handleAudioFocus)
+            setWakeMode(C.WAKE_MODE_NETWORK) // Prevent WiFi/CPU from sleeping during streaming
             // Explicitly keep both players live so they can overlap without affecting each other
             playWhenReady = false
         }
