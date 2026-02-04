@@ -78,6 +78,7 @@ fun EnhancedSongListItem(
     showAlbumArt: Boolean = true,
     customShape: androidx.compose.ui.graphics.Shape? = null,
     isSelected: Boolean = false,
+    selectionIndex: Int? = null,
     isSelectionMode: Boolean = false,
     onLongPress: () -> Unit = {},
     onMoreOptionsClick: (Song) -> Unit,
@@ -313,12 +314,21 @@ fun EnhancedSongListItem(
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.CheckCircle,
-                                    contentDescription = "Selected",
-                                    tint = colors.onPrimary,
-                                    modifier = Modifier.size(28.dp)
-                                )
+                                if (selectionIndex != null && selectionIndex >= 0) {
+                                    Text(
+                                        text = "${selectionIndex + 1}",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colors.onPrimary
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Rounded.CheckCircle,
+                                        contentDescription = "Selected",
+                                        tint = colors.onPrimary,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
                             }
                         }
                     }

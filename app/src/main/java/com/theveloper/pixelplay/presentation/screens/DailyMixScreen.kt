@@ -204,7 +204,7 @@ fun DailyMixScreen(
 
             PlaylistBottomSheet(
                 playlistUiState = playlistUiState,
-                song = song,
+                songs = listOf(song),
                 onDismiss = { showPlaylistBottomSheet = false },
                 bottomBarHeight = bottomBarHeightDp,
                 playerViewModel = playerViewModel,

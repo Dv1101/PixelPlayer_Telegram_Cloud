@@ -218,6 +218,7 @@ fun LibraryScreen(
 
     var showSongInfoBottomSheet by remember { mutableStateOf(false) }
     var showPlaylistBottomSheet by remember { mutableStateOf(false) }
+    var playlistSheetSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
     val selectedSongForInfo by playerViewModel.selectedSongForInfo.collectAsState()
     val tabTitles by playerViewModel.libraryTabsFlow.collectAsState()
     val pagerState = rememberPagerState(initialPage = lastTabIndex) { tabTitles.size }
@@ -795,7 +796,12 @@ fun LibraryScreen(
                                         bottomBarHeight = bottomBarHeightDp,
                                         onMoreOptionsClick = stableOnMoreOptionsClick,
                                         isRefreshing = isRefreshing,
-                                        onRefresh = onRefresh
+                                        onRefresh = onRefresh,
+                                        isSelectionMode = isSelectionMode,
+                                        selectedSongIds = selectedSongIds,
+                                        onSongLongPress = onSongLongPress,
+                                        onSongSelectionToggle = onSongSelectionToggle,
+                                        getSelectionIndex = playerViewModel.multiSelectionStateHolder::getSelectionIndex
                                     )
                                 }
 
@@ -838,7 +844,12 @@ fun LibraryScreen(
                                             isPlaylistView = playerUiState.isFoldersPlaylistView,
                                             currentSortOption = playerUiState.currentFolderSortOption,
                                             isRefreshing = isRefreshing,
-                                            onRefresh = onRefresh
+                                            onRefresh = onRefresh,
+                                            isSelectionMode = isSelectionMode,
+                                            selectedSongIds = selectedSongIds,
+                                            onSongLongPress = onSongLongPress,
+                                            onSongSelectionToggle = onSongSelectionToggle,
+                                            getSelectionIndex = playerViewModel.multiSelectionStateHolder::getSelectionIndex
                                         )
                                     } else {
                                         Column(
@@ -1026,6 +1037,7 @@ fun LibraryScreen(
                     playerViewModel.sendToast("Will play next")
                 },
                 onAddToPlayList = {
+                    playlistSheetSongs = listOf(currentSong)
                     showPlaylistBottomSheet = true
                 },
                 onDeleteFromDevice = playerViewModel::deleteFromDevice,
@@ -1045,19 +1057,19 @@ fun LibraryScreen(
                 },
                 removeFromListTrigger = {}
             )
-
-            if (showPlaylistBottomSheet) {
-                val playlistUiState by playlistViewModel.uiState.collectAsState()
-
-                PlaylistBottomSheet(
-                    playlistUiState = playlistUiState,
-                    song = currentSong,
-                    onDismiss = { showPlaylistBottomSheet = false },
-                    bottomBarHeight = bottomBarHeightDp,
-                    playerViewModel = playerViewModel,
-                )
-            }
         }
+    }
+
+    if (showPlaylistBottomSheet) {
+        val playlistUiState by playlistViewModel.uiState.collectAsState()
+
+        PlaylistBottomSheet(
+            playlistUiState = playlistUiState,
+            songs = playlistSheetSongs,
+            onDismiss = { showPlaylistBottomSheet = false },
+            bottomBarHeight = bottomBarHeightDp,
+            playerViewModel = playerViewModel,
+        )
     }
 
     // Multi-Selection Bottom Sheet
@@ -1081,8 +1093,9 @@ fun LibraryScreen(
                 showMultiSelectionSheet = false
             },
             onAddToPlaylist = {
-                // TODO: Open playlist picker for batch add
+                playlistSheetSongs = selectedSongs
                 showMultiSelectionSheet = false
+                showPlaylistBottomSheet = true
             },
             onToggleLikeAll = { shouldLike ->
                 if (shouldLike) {
@@ -1437,7 +1450,12 @@ fun LibraryFoldersTab(
     isPlaylistView: Boolean = false,
     currentSortOption: SortOption = SortOption.FolderNameAZ,
     isRefreshing: Boolean,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    isSelectionMode: Boolean = false,
+    selectedSongIds: Set<String> = emptySet(),
+    onSongLongPress: (Song) -> Unit = {},
+    onSongSelectionToggle: (Song) -> Unit = {},
+    getSelectionIndex: (String) -> Int? = { null }
 ) {
     // List state moved inside AnimatedContent to prevent state sharing issues during transitions
 
@@ -1587,13 +1605,21 @@ fun LibraryFoldersTab(
                                         isPlaying = stablePlayerState.currentSong?.id == song.id && stablePlayerState.isPlaying,
                                         isCurrentSong = stablePlayerState.currentSong?.id == song.id,
                                         onMoreOptionsClick = { onMoreOptionsClick(song) },
+                                        isSelected = selectedSongIds.contains(song.id),
+                                        selectionIndex = if (isSelectionMode) getSelectionIndex(song.id) else null,
+                                        isSelectionMode = isSelectionMode,
+                                        onLongPress = { onSongLongPress(song) },
                                         onClick = {
-                                            val songIndex = songsToShow.indexOf(song)
-                                            if (songIndex != -1) {
-                                                val songsToPlay =
-                                                    songsToShow.subList(songIndex, songsToShow.size)
-                                                        .toList()
-                                                onPlaySong(song, songsToPlay)
+                                            if (isSelectionMode) {
+                                                onSongSelectionToggle(song)
+                                            } else {
+                                                val songIndex = songsToShow.indexOf(song)
+                                                if (songIndex != -1) {
+                                                    val songsToPlay =
+                                                        songsToShow.subList(songIndex, songsToShow.size)
+                                                            .toList()
+                                                    onPlaySong(song, songsToPlay)
+                                                }
                                             }
                                         }
                                     )
@@ -1709,7 +1735,12 @@ fun LibraryFavoritesTab(
     bottomBarHeight: Dp,
     onMoreOptionsClick: (Song) -> Unit,
     isRefreshing: Boolean,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    isSelectionMode: Boolean = false,
+    selectedSongIds: Set<String> = emptySet(),
+    onSongLongPress: (Song) -> Unit = {},
+    onSongSelectionToggle: (Song) -> Unit = {},
+    getSelectionIndex: (String) -> Int? = { null }
 ) {
     val stablePlayerState by playerViewModel.stablePlayerState.collectAsState()
     val listState = rememberLazyListState()
@@ -1782,12 +1813,20 @@ fun LibraryFavoritesTab(
                                 isCurrentSong = stablePlayerState.currentSong?.id == song.id,
                                 isPlaying = isPlayingThisSong,
                                 onMoreOptionsClick = { onMoreOptionsClick(song) },
+                                isSelected = selectedSongIds.contains(song.id),
+                                selectionIndex = if (isSelectionMode) getSelectionIndex(song.id) else null,
+                                isSelectionMode = isSelectionMode,
+                                onLongPress = { onSongLongPress(song) },
                                 onClick = {
-                                    playerViewModel.showAndPlaySong(
-                                        song,
-                                        favoriteSongs,
-                                        "Liked Songs"
-                                    )
+                                    if (isSelectionMode) {
+                                        onSongSelectionToggle(song)
+                                    } else {
+                                        playerViewModel.showAndPlaySong(
+                                            song,
+                                            favoriteSongs,
+                                            "Liked Songs"
+                                        )
+                                    }
                                 }
                             )
                         }
