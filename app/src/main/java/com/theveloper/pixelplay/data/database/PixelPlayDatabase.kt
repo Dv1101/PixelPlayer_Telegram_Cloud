@@ -193,6 +193,45 @@ abstract class PixelPlayDatabase : RoomDatabase() {
                 } catch (e: Exception) {
                     // Column might already exist
                 }
+
+                // Fix for album_art_themes schema mismatch if user is coming from version 16 (where the schema might be broken)
+                // We re-apply the DROP and RECREATE strategy here to ensure everyone ends up with the correct schema.
+                db.execSQL("DROP TABLE IF EXISTS album_art_themes")
+
+                val colorColumns = listOf(
+                    "primary", "onPrimary", "primaryContainer", "onPrimaryContainer",
+                    "secondary", "onSecondary", "secondaryContainer", "onSecondaryContainer",
+                    "tertiary", "onTertiary", "tertiaryContainer", "onTertiaryContainer",
+                    "background", "onBackground", "surface", "onSurface",
+                    "surfaceVariant", "onSurfaceVariant", "error", "onError",
+                    "outline", "errorContainer", "onErrorContainer",
+                    "inversePrimary", "inverseSurface", "inverseOnSurface",
+                    "surfaceTint", "outlineVariant", "scrim",
+                    "surfaceBright", "surfaceDim",
+                    "surfaceContainer", "surfaceContainerHigh", "surfaceContainerHighest", "surfaceContainerLow", "surfaceContainerLowest",
+                    "primaryFixed", "primaryFixedDim", "onPrimaryFixed", "onPrimaryFixedVariant",
+                    "secondaryFixed", "secondaryFixedDim", "onSecondaryFixed", "onSecondaryFixedVariant",
+                    "tertiaryFixed", "tertiaryFixedDim", "onTertiaryFixed", "onTertiaryFixedVariant"
+                )
+
+                val themePrefixes = listOf("light_", "dark_")
+                val columnDefinitions = StringBuilder()
+                
+                // Add standard columns
+                columnDefinitions.append("albumArtUriString TEXT NOT NULL, ")
+                columnDefinitions.append("paletteStyle TEXT NOT NULL, ")
+
+                // Add dynamic color columns
+                themePrefixes.forEach { prefix ->
+                    colorColumns.forEach { column ->
+                        columnDefinitions.append("${prefix}${column} TEXT NOT NULL, ")
+                    }
+                }
+
+                // Remove trailing comma and space
+                val columnsSql = columnDefinitions.toString().trimEnd(',', ' ')
+
+                db.execSQL("CREATE TABLE IF NOT EXISTS album_art_themes ($columnsSql, PRIMARY KEY(albumArtUriString))")
             }
         }
 
