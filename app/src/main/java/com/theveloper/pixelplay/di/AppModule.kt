@@ -33,6 +33,7 @@ import com.theveloper.pixelplay.data.repository.MusicRepositoryImpl
 import com.theveloper.pixelplay.data.repository.SongRepository
 import com.theveloper.pixelplay.data.repository.TransitionRepository
 import com.theveloper.pixelplay.data.repository.TransitionRepositoryImpl
+import com.theveloper.pixelplay.data.repository.FolderTreeBuilder
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -194,6 +195,12 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideFolderTreeBuilder(): FolderTreeBuilder {
+        return FolderTreeBuilder()
+    }
+
+    @Provides
+    @Singleton
     fun provideMusicRepository(
         @ApplicationContext context: Context,
         userPreferencesRepository: UserPreferencesRepository,
@@ -202,7 +209,8 @@ object AppModule {
         lyricsRepository: LyricsRepository,
         songRepository: SongRepository,
         favoritesDao: FavoritesDao,
-        artistImageRepository: ArtistImageRepository
+        artistImageRepository: ArtistImageRepository,
+        folderTreeBuilder: FolderTreeBuilder
     ): MusicRepository {
         return MusicRepositoryImpl(
             context = context,
@@ -212,7 +220,8 @@ object AppModule {
             lyricsRepository = lyricsRepository,
             songRepository = songRepository,
             favoritesDao = favoritesDao,
-            artistImageRepository = artistImageRepository
+            artistImageRepository = artistImageRepository,
+            folderTreeBuilder = folderTreeBuilder
         )
     }
 
