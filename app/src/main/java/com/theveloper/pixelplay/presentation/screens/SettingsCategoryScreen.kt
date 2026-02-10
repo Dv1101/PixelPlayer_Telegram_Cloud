@@ -176,6 +176,8 @@ fun SettingsCategoryScreen(
     // Local State
     var showExplorerSheet by remember { mutableStateOf(false) }
     var refreshRequested by remember { mutableStateOf(false) }
+    var syncRequestObservedRunning by remember { mutableStateOf(false) }
+    var syncIndicatorLabel by remember { mutableStateOf<String?>(null) }
     var showClearLyricsDialog by remember { mutableStateOf(false) }
     var showRebuildDatabaseWarning by remember { mutableStateOf(false) }
     var showRegenerateDailyMixDialog by remember { mutableStateOf(false) }
@@ -204,6 +206,19 @@ fun SettingsCategoryScreen(
     LaunchedEffect(Unit) {
         settingsViewModel.dataTransferEvents.collectLatest { message ->
             Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    LaunchedEffect(isSyncing, refreshRequested) {
+        if (!refreshRequested) return@LaunchedEffect
+
+        if (isSyncing) {
+            syncRequestObservedRunning = true
+        } else if (syncRequestObservedRunning) {
+            Toast.makeText(context, "Library sync finished", Toast.LENGTH_SHORT).show()
+            refreshRequested = false
+            syncRequestObservedRunning = false
+            syncIndicatorLabel = null
         }
     }
 
@@ -372,9 +387,12 @@ fun SettingsCategoryScreen(
                                 RefreshLibraryItem(
                                     isSyncing = isSyncing,
                                     syncProgress = syncProgress,
+                                    activeOperationLabel = if (isSyncing) syncIndicatorLabel else null,
                                     onFullSync = {
                                         if (isSyncing) return@RefreshLibraryItem
                                         refreshRequested = true
+                                        syncRequestObservedRunning = false
+                                        syncIndicatorLabel = "Running full rescan"
                                         Toast.makeText(context, "Full rescan started…", Toast.LENGTH_SHORT).show()
                                         settingsViewModel.fullSyncLibrary()
                                     },
@@ -1009,6 +1027,8 @@ fun SettingsCategoryScreen(
                     onClick = { 
                         showRebuildDatabaseWarning = false
                         refreshRequested = true
+                        syncRequestObservedRunning = false
+                        syncIndicatorLabel = "Rebuilding database"
                         Toast.makeText(context, "Rebuilding database…", Toast.LENGTH_SHORT).show()
                         settingsViewModel.rebuildDatabase() 
                     },
