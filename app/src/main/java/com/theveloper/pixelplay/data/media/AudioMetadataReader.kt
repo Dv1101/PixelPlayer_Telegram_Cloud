@@ -10,11 +10,15 @@ import java.io.File
 data class AudioMetadata(
     val title: String?,
     val artist: String?,
+    val albumArtist: String?,
     val album: String?,
     val genre: String?,
+    val lyrics: String?,
     val durationMs: Long?,
     val trackNumber: Int?,
     val year: Int?,
+    val bitrate: Int?,
+    val sampleRate: Int?,
     val artwork: AudioMetadataArtwork?
 )
 
@@ -48,6 +52,8 @@ object AudioMetadataReader {
                 // Get audio properties for duration
                 val audioProperties = TagLib.getAudioProperties(fd.dup().detachFd())
                 val durationMs = audioProperties?.length?.takeIf { it > 0 }?.let { it * 1000L }
+                val bitrate = audioProperties?.bitrate?.takeIf { it > 0 }
+                val sampleRate = audioProperties?.sampleRate?.takeIf { it > 0 }
 
                 // Get metadata
                 val metadata = TagLib.getMetadata(fd.dup().detachFd(), readPictures = false)
@@ -55,8 +61,13 @@ object AudioMetadataReader {
 
                 val title = propertyMap["TITLE"]?.firstOrNull()?.takeIf { it.isNotBlank() }
                 val artist = propertyMap["ARTIST"]?.firstOrNull()?.takeIf { it.isNotBlank() }
+                val albumArtist = propertyMap["ALBUMARTIST"]?.firstOrNull()?.takeIf { it.isNotBlank() }
+                    ?: propertyMap["ALBUM ARTIST"]?.firstOrNull()?.takeIf { it.isNotBlank() }
+                    ?: propertyMap["BAND"]?.firstOrNull()?.takeIf { it.isNotBlank() }
                 val album = propertyMap["ALBUM"]?.firstOrNull()?.takeIf { it.isNotBlank() }
                 val genre = propertyMap["GENRE"]?.firstOrNull()?.takeIf { it.isNotBlank() }
+                val lyrics = propertyMap["LYRICS"]?.firstOrNull()?.takeIf { it.isNotBlank() }
+                    ?: propertyMap["UNSYNCEDLYRICS"]?.firstOrNull()?.takeIf { it.isNotBlank() }
                 val trackString = propertyMap["TRACKNUMBER"]?.firstOrNull()?.takeIf { it.isNotBlank() }
                     ?: propertyMap["TRACK"]?.firstOrNull()?.takeIf { it.isNotBlank() }
                 val trackNumber = trackString?.substringBefore('/')?.toIntOrNull()
@@ -77,11 +88,15 @@ object AudioMetadataReader {
                 AudioMetadata(
                     title = title,
                     artist = artist,
+                    albumArtist = albumArtist,
                     album = album,
                     genre = genre,
+                    lyrics = lyrics,
                     durationMs = durationMs,
                     trackNumber = trackNumber,
                     year = year,
+                    bitrate = bitrate,
+                    sampleRate = sampleRate,
                     artwork = artwork
                 )
             }

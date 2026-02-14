@@ -3,17 +3,17 @@ package com.theveloper.pixelplay.presentation.components.player
 import android.annotation.SuppressLint
 import android.content.res.Configuration
 import android.net.Uri
+import com.theveloper.pixelplay.data.model.Lyrics
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -55,7 +55,6 @@ import androidx.compose.material3.LoadingIndicator
 // import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults // Removed
 // import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState // Removed
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -67,16 +66,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -94,13 +90,14 @@ import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
-import androidx.compose.ui.input.pointer.consumeAllChanges
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.res.stringResource
 import androidx.media3.common.Player
@@ -114,9 +111,6 @@ import com.theveloper.pixelplay.presentation.components.AlbumCarouselSection
 import com.theveloper.pixelplay.presentation.components.AutoScrollingTextOnDemand
 import com.theveloper.pixelplay.presentation.components.LocalMaterialTheme
 import com.theveloper.pixelplay.presentation.components.LyricsSheet
-import com.theveloper.pixelplay.presentation.components.WavyMusicSlider
-import com.theveloper.pixelplay.presentation.components.scoped.DeferAt
-import com.theveloper.pixelplay.presentation.components.scoped.PrefetchAlbumNeighborsImg
 import com.theveloper.pixelplay.presentation.components.scoped.rememberSmoothProgress
 import com.theveloper.pixelplay.presentation.components.subcomps.FetchLyricsDialog
 import com.theveloper.pixelplay.presentation.viewmodel.LyricsSearchUiState
@@ -126,13 +120,14 @@ import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import com.theveloper.pixelplay.utils.AudioMetaUtils.mimeTypeToFormat
 import com.theveloper.pixelplay.utils.formatDuration
 import kotlinx.collections.immutable.ImmutableList
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 import timber.log.Timber
+import java.util.Locale
 import kotlin.math.roundToLong
+import com.theveloper.pixelplay.presentation.components.WavySliderExpressive
+import com.theveloper.pixelplay.presentation.components.ToggleSegmentButton
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @SuppressLint("StateFlowValueCalledInComposition")
@@ -144,6 +139,7 @@ fun FullPlayerContent(
     currentQueueSourceName: String,
     isShuffleEnabled: Boolean,
     repeatMode: Int,
+    allowRealtimeUpdates: Boolean = true,
     expansionFractionProvider: () -> Float,
     currentSheetState: PlayerSheetState,
     carouselStyle: String,
@@ -152,7 +148,12 @@ fun FullPlayerContent(
     // State Providers
     currentPositionProvider: () -> Long,
     isPlayingProvider: () -> Boolean,
+    playWhenReadyProvider: () -> Boolean,
     isFavoriteProvider: () -> Boolean,
+    repeatModeProvider: () -> Int,
+    isShuffleEnabledProvider: () -> Boolean,
+    totalDurationProvider: () -> Long,
+    lyricsProvider: () -> Lyrics? = { null }, 
     // State
     isCastConnecting: Boolean = false,
     // Event Handlers
@@ -181,10 +182,20 @@ fun FullPlayerContent(
     var showSongInfoBottomSheet by remember { mutableStateOf(false) }
     var showLyricsSheet by remember { mutableStateOf(false) }
     var showArtistPicker by rememberSaveable { mutableStateOf(false) }
-    val stablePlayerState by playerViewModel.stablePlayerState.collectAsState()
+    
     val lyricsSearchUiState by playerViewModel.lyricsSearchUiState.collectAsState()
     val currentSongArtists by playerViewModel.currentSongArtists.collectAsState()
     val lyricsSyncOffset by playerViewModel.currentSongLyricsSyncOffset.collectAsState()
+    val albumArtQuality by playerViewModel.albumArtQuality.collectAsState()
+    val playbackAudioMetadata by playerViewModel.playbackAudioMetadata.collectAsState()
+    val showPlayerFileInfo by playerViewModel.showPlayerFileInfo.collectAsState()
+    val immersiveLyricsEnabled by playerViewModel.immersiveLyricsEnabled.collectAsState()
+    val immersiveLyricsTimeout by playerViewModel.immersiveLyricsTimeout.collectAsState()
+    val isImmersiveTemporarilyDisabled by playerViewModel.isImmersiveTemporarilyDisabled.collectAsState()
+    val isRemotePlaybackActive by playerViewModel.isRemotePlaybackActive.collectAsState()
+    val selectedRouteName by playerViewModel.selectedRoute.map { it?.name }.collectAsState(initial = null)
+    val isBluetoothEnabled by playerViewModel.isBluetoothEnabled.collectAsState()
+    val bluetoothName by playerViewModel.bluetoothName.collectAsState()
 
     var showFetchLyricsDialog by remember { mutableStateOf(false) }
     var totalDrag by remember { mutableStateOf(0f) }
@@ -211,21 +222,31 @@ fun FullPlayerContent(
     )
 
     // totalDurationValue is derived from stablePlayerState, so it's fine.
-    val totalDurationValue by remember {
-        playerViewModel.stablePlayerState.map { it.totalDuration }.distinctUntilChanged()
-    }.collectAsState(initial = 0L)
+    // OPTIMIZATION: Use passed provider instead of collecting flow
+    val totalDurationValue = totalDurationProvider()
 
     val stableControlAnimationSpec = remember {
         tween<Float>(durationMillis = 240, easing = FastOutSlowInEasing)
     }
 
-    val controlOtherButtonsColor = LocalMaterialTheme.current.primary.copy(alpha = 0.15f)
-    val controlPlayPauseColor = LocalMaterialTheme.current.primary
-    val controlTintPlayPauseIcon = LocalMaterialTheme.current.onPrimary
-    val controlTintOtherIcons = LocalMaterialTheme.current.primary
+    val playerOnBaseColor = LocalMaterialTheme.current.onPrimaryContainer
+    val playerAccentColor = LocalMaterialTheme.current.primary
+    val playerOnAccentColor = LocalMaterialTheme.current.onPrimary
+    val playerSecondaryAccentColor = LocalMaterialTheme.current.secondary
+    val playerOnSecondaryAccentColor = LocalMaterialTheme.current.onSecondary
+    val playerOnSecondaryContainerColor = LocalMaterialTheme.current.onSecondaryContainer
+    val playerTertiaryAccentColor = LocalMaterialTheme.current.tertiaryContainer
+    val playerOnTertiaryAccentColor = LocalMaterialTheme.current.onTertiaryContainer
+    val playerSurfaceColor = LocalMaterialTheme.current.surfaceContainer
+    val playerSurfaceHighColor = LocalMaterialTheme.current.surfaceContainerHigh
+    val playerSurfaceHighestColor = LocalMaterialTheme.current.surfaceContainerHighest
+    val playerSubtleTextColor = LocalMaterialTheme.current.onSurfaceVariant
+    val playerOnSurfaceColor = LocalMaterialTheme.current.onSurface
 
-    val placeholderColor = LocalMaterialTheme.current.primary.copy(alpha = 0.08f)
-    val placeholderOnColor = LocalMaterialTheme.current.primary.copy(alpha = 0.04f)
+    val controlTintOtherIcons = playerOnSecondaryAccentColor
+
+    val placeholderColor = playerOnBaseColor.copy(alpha = 0.1f)
+    val placeholderOnColor = playerOnBaseColor.copy(alpha = 0.2f)
 
     val isLandscape =
         LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -233,7 +254,7 @@ fun FullPlayerContent(
 
     // Lógica para el botón de Lyrics en el reproductor expandido
     val onLyricsClick = {
-        val lyrics = stablePlayerState.lyrics
+        val lyrics = lyricsProvider()
         if (lyrics?.synced.isNullOrEmpty() && lyrics?.plain.isNullOrEmpty()) {
             // Si no hay letra, mostramos el diálogo para buscar
             showFetchLyricsDialog = true
@@ -244,28 +265,34 @@ fun FullPlayerContent(
     }
 
     if (showFetchLyricsDialog) {
-        FetchLyricsDialog(
-            uiState = lyricsSearchUiState,
-            currentSong = stablePlayerState.currentSong,
-            onConfirm = { forcePick ->
-                // El usuario confirma, iniciamos la búsqueda
-                playerViewModel.fetchLyricsForCurrentSong(forcePick)
-            },
-            onPickResult = { result ->
-                playerViewModel.acceptLyricsSearchResultForCurrentSong(result)
-            },
-            onManualSearch = { title, artist ->
-                playerViewModel.searchLyricsManually(title, artist)
-            },
-            onDismiss = {
-                // El usuario cancela o cierra el diálogo
-                showFetchLyricsDialog = false
-                playerViewModel.resetLyricsSearchState()
-            },
-            onImport = {
-                filePickerLauncher.launch("*/*")
-            }
-        )
+        MaterialTheme(
+            colorScheme = LocalMaterialTheme.current,
+            typography = MaterialTheme.typography,
+            shapes = MaterialTheme.shapes
+        ) {
+            FetchLyricsDialog(
+                uiState = lyricsSearchUiState,
+                currentSong = song, // Use 'song' which is derived from args/retained
+                onConfirm = { forcePick ->
+                    // El usuario confirma, iniciamos la búsqueda
+                    playerViewModel.fetchLyricsForCurrentSong(forcePick)
+                },
+                onPickResult = { result ->
+                    playerViewModel.acceptLyricsSearchResultForCurrentSong(result)
+                },
+                onManualSearch = { title, artist ->
+                    playerViewModel.searchLyricsManually(title, artist)
+                },
+                onDismiss = {
+                    // El usuario cancela o cierra el diálogo
+                    showFetchLyricsDialog = false
+                    playerViewModel.resetLyricsSearchState()
+                },
+                onImport = {
+                    filePickerLauncher.launch("*/*")
+                }
+            )
+        }
     }
 
     // Observador para reaccionar al resultado de la búsqueda de letras
@@ -284,15 +311,21 @@ fun FullPlayerContent(
         }
     }
 
-    val gestureScope = rememberCoroutineScope()
-    val isCastConnecting by playerViewModel.isCastConnecting.collectAsState()
-
     // Sub sections , to be reused in different layout modes
 
     @SuppressLint("UnusedBoxWithConstraintsScope")
     @Composable
     fun AlbumCoverSection(modifier: Modifier = Modifier) {
         val shouldDelay = loadingTweaks.delayAll || loadingTweaks.delayAlbumCarousel
+        val shouldApplyPausedScale = !isPlayingProvider() && !playWhenReadyProvider()
+        val albumArtScale by animateFloatAsState(
+            targetValue = if (shouldApplyPausedScale) 0.95f else 1f,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioNoBouncy,
+                stiffness = Spring.StiffnessLow
+            ),
+            label = "AlbumArtScale"
+        )
 
         BoxWithConstraints(
             modifier = modifier
@@ -309,15 +342,34 @@ fun FullPlayerContent(
             DelayedContent(
                 shouldDelay = shouldDelay,
                 showPlaceholders = loadingTweaks.showPlaceholders,
+                applyPlaceholderDelayOnClose = loadingTweaks.applyPlaceholdersOnClose,
+                sharedBoundsModifier = Modifier.fillMaxWidth().height(carouselHeight),
                 expansionFractionProvider = expansionFractionProvider,
                 isExpandedOverride = currentSheetState == PlayerSheetState.EXPANDED,
                 normalStartThreshold = 0.08f,
                 delayAppearThreshold = loadingTweaks.contentAppearThresholdPercent / 100f,
+                delayCloseThreshold = 1f - (loadingTweaks.contentCloseThresholdPercent / 100f),
                 placeholder = {
                     if (loadingTweaks.transparentPlaceholders) {
-                        Box(Modifier.height(carouselHeight).fillMaxWidth())
+                        Box(
+                            Modifier
+                                .height(carouselHeight)
+                                .fillMaxWidth()
+                                .graphicsLayer {
+                                    scaleX = albumArtScale
+                                    scaleY = albumArtScale
+                                }
+                        )
                     } else {
-                        AlbumPlaceholder(height = carouselHeight, placeholderColor, placeholderOnColor)
+                        AlbumPlaceholder(
+                            height = carouselHeight,
+                            color = placeholderColor,
+                            onColor = placeholderOnColor,
+                            modifier = Modifier.graphicsLayer {
+                                scaleX = albumArtScale
+                                scaleY = albumArtScale
+                            }
+                        )
                     }
                 }
             ) {
@@ -335,7 +387,13 @@ fun FullPlayerContent(
                         }
                     },
                     carouselStyle = carouselStyle,
-                    modifier = Modifier.height(carouselHeight)
+                    modifier = Modifier
+                        .height(carouselHeight)
+                        .graphicsLayer {
+                            scaleX = albumArtScale
+                            scaleY = albumArtScale
+                        },
+                    albumArtQuality = albumArtQuality
                 )
             }
         }
@@ -348,13 +406,16 @@ fun FullPlayerContent(
         DelayedContent(
             shouldDelay = shouldDelay,
             showPlaceholders = loadingTweaks.showPlaceholders,
+            applyPlaceholderDelayOnClose = loadingTweaks.applyPlaceholdersOnClose,
+            sharedBoundsModifier = Modifier.fillMaxWidth().height(182.dp),
             expansionFractionProvider = expansionFractionProvider,
             isExpandedOverride = currentSheetState == PlayerSheetState.EXPANDED,
             normalStartThreshold = 0.42f,
             delayAppearThreshold = loadingTweaks.contentAppearThresholdPercent / 100f,
+            delayCloseThreshold = 1f - (loadingTweaks.contentCloseThresholdPercent / 100f),
             placeholder = {
                 if (loadingTweaks.transparentPlaceholders) {
-                    Box(Modifier.fillMaxWidth().height(174.dp))
+                    Box(Modifier.fillMaxWidth().height(182.dp))
                 } else {
                     ControlsPlaceholder(placeholderColor, placeholderOnColor)
                 }
@@ -373,10 +434,14 @@ fun FullPlayerContent(
                     height = 80.dp,
                     pressAnimationSpec = stableControlAnimationSpec,
                     releaseDelay = 220L,
-                    colorOtherButtons = controlOtherButtonsColor,
-                    colorPlayPause = controlPlayPauseColor,
-                    tintPlayPauseIcon = controlTintPlayPauseIcon,
-                    tintOtherIcons = controlTintOtherIcons
+                    colorOtherButtons = playerSecondaryAccentColor,
+                    colorPlayPause = playerAccentColor,
+                    tintPlayPauseIcon = playerOnAccentColor,
+                    tintOtherIcons = controlTintOtherIcons,
+                    colorPreviousButton = playerOnAccentColor,
+                    colorNextButton = playerOnAccentColor,
+                    tintPreviousIcon = playerAccentColor,
+                    tintNextIcon = playerAccentColor
                 )
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -384,11 +449,11 @@ fun FullPlayerContent(
                 BottomToggleRow(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 58.dp, max = 78.dp)
+                        .heightIn(min = 66.dp, max = 86.dp)
                         .padding(horizontal = 26.dp, vertical = 0.dp)
                         .padding(bottom = 6.dp),
-                    isShuffleEnabled = isShuffleEnabled,
-                    repeatMode = repeatMode,
+                    isShuffleEnabled = isShuffleEnabledProvider(),
+                    repeatMode = repeatModeProvider(),
                     isFavoriteProvider = isFavoriteProvider,
                     onShuffleToggle = onShuffleToggle,
                     onRepeatToggle = onRepeatToggle,
@@ -400,17 +465,25 @@ fun FullPlayerContent(
 
     @Composable
     fun PlayerProgressSection() {
+        val isMetadataForCurrentSong = playbackAudioMetadata.mediaId == song.id
         PlayerProgressBarSection(
+            songId = song.id,
             currentPositionProvider = currentPositionProvider,
             totalDurationValue = totalDurationValue,
+            songDurationHintMs = song.duration,
+            audioMimeType = if (isMetadataForCurrentSong) playbackAudioMetadata.mimeType else null,
+            audioBitrate = if (isMetadataForCurrentSong) playbackAudioMetadata.bitrate else null,
+            audioSampleRate = if (isMetadataForCurrentSong) playbackAudioMetadata.sampleRate else null,
+            showAudioFileInfo = showPlayerFileInfo,
             onSeek = onSeek,
             expansionFractionProvider = expansionFractionProvider,
             isPlayingProvider = isPlayingProvider,
             currentSheetState = currentSheetState,
-            activeTrackColor = LocalMaterialTheme.current.primary,
-            inactiveTrackColor = LocalMaterialTheme.current.primary.copy(alpha = 0.2f),
-            thumbColor = LocalMaterialTheme.current.primary,
-            timeTextColor = LocalMaterialTheme.current.onPrimaryContainer.copy(alpha = 0.7f),
+            activeTrackColor = playerAccentColor,
+            inactiveTrackColor = playerOnBaseColor.copy(alpha = 0.2f),
+            thumbColor = playerAccentColor,
+            timeTextColor = playerOnBaseColor,
+            allowRealtimeUpdates = allowRealtimeUpdates,
             loadingTweaks = loadingTweaks
         )
     }
@@ -422,15 +495,23 @@ fun FullPlayerContent(
         DelayedContent(
             shouldDelay = shouldDelay,
             showPlaceholders = loadingTweaks.showPlaceholders,
+            applyPlaceholderDelayOnClose = loadingTweaks.applyPlaceholdersOnClose,
+            sharedBoundsModifier = Modifier.fillMaxWidth().heightIn(min = 70.dp),
             expansionFractionProvider = expansionFractionProvider,
             isExpandedOverride = currentSheetState == PlayerSheetState.EXPANDED,
             normalStartThreshold = 0.20f,
             delayAppearThreshold = loadingTweaks.contentAppearThresholdPercent / 100f,
+            delayCloseThreshold = 1f - (loadingTweaks.contentCloseThresholdPercent / 100f),
             placeholder = {
                 if (loadingTweaks.transparentPlaceholders) {
                     Box(Modifier.fillMaxWidth().height(70.dp))
                 } else {
-                    MetadataPlaceholder(expansionFractionProvider(), placeholderColor, placeholderOnColor)
+                    MetadataPlaceholder(
+                        expansionFraction = expansionFractionProvider(),
+                        color = placeholderColor,
+                        onColor = placeholderOnColor,
+                        showQueueButtons = isLandscape
+                    )
                 }
             }
         ) {
@@ -441,20 +522,23 @@ fun FullPlayerContent(
                 song = song,
                 currentSongArtists = currentSongArtists,
                 expansionFractionProvider = expansionFractionProvider,
-                textColor = LocalMaterialTheme.current.onPrimaryContainer,
-                artistTextColor = LocalMaterialTheme.current.onPrimaryContainer.copy(alpha = 0.8f),
+                textColor = playerOnBaseColor,
+                artistTextColor = playerOnBaseColor.copy(alpha = 0.7f),
                 playerViewModel = playerViewModel,
                 gradientEdgeColor = LocalMaterialTheme.current.primaryContainer,
+                chipColor = playerOnAccentColor.copy(alpha = 0.8f),
+                chipContentColor = playerAccentColor,
                 showQueueButton = isLandscape,
                 onClickQueue = {
                     showSongInfoBottomSheet = true
                     onShowQueueClicked()
                 },
                 onClickArtist = {
+                    val resolvedArtistId = currentSongArtists.firstOrNull()?.id ?: song.artistId
                     if (currentSongArtists.size > 1) {
                         showArtistPicker = true
                     } else {
-                        playerViewModel.triggerArtistNavigationFromPlayer(song.artistId)
+                        playerViewModel.triggerArtistNavigationFromPlayer(resolvedArtistId)
                     }
                 }
             )
@@ -480,11 +564,15 @@ fun FullPlayerContent(
 
             AlbumCoverSection()
 
-            Box(Modifier.align(Alignment.Start)) {
-                SongMetadataSection()
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Box(Modifier.align(Alignment.Start)) {
+                    SongMetadataSection()
+                }
+                PlayerProgressSection()
             }
-
-            PlayerProgressSection()
 
             ControlsSection()
         }
@@ -531,7 +619,8 @@ fun FullPlayerContent(
     Scaffold(
         containerColor = Color.Transparent,
         modifier = Modifier.pointerInput(currentSheetState) {
-            val queueDragActivationThresholdPx = 6.dp.toPx()
+            val queueDragActivationThresholdPx = 4.dp.toPx()
+            val quickFlickVelocityThreshold = -520f
 
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
@@ -546,10 +635,12 @@ fun FullPlayerContent(
                 var dragConsumedByQueue = false
                 val velocityTracker = VelocityTracker()
                 var totalDrag = 0f
+                velocityTracker.addPosition(down.uptimeMillis, down.position)
 
                 drag(down.id) { change ->
                     val dragAmount = change.positionChange().y
                     totalDrag += dragAmount
+                    velocityTracker.addPosition(change.uptimeMillis, change.position)
                     val isDraggingUp = totalDrag < -queueDragActivationThresholdPx
 
                     if (isDraggingUp && !dragConsumedByQueue) {
@@ -559,13 +650,18 @@ fun FullPlayerContent(
 
                     if (dragConsumedByQueue) {
                         change.consume()
-                        velocityTracker.addPosition(change.uptimeMillis, change.position)
                         onQueueDrag(dragAmount)
                     }
                 }
 
+                val velocity = velocityTracker.calculateVelocity().y
                 if (dragConsumedByQueue) {
-                    val velocity = velocityTracker.calculateVelocity().y
+                    onQueueRelease(totalDrag, velocity)
+                } else if (
+                    totalDrag < -(queueDragActivationThresholdPx * 2f) &&
+                    velocity < quickFlickVelocityThreshold
+                ) {
+                    // Treat short/fast upward flick as queue-open intent.
                     onQueueRelease(totalDrag, velocity)
                 }
             }
@@ -583,11 +679,8 @@ fun FullPlayerContent(
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = Color.Transparent,
                         titleContentColor = LocalMaterialTheme.current.onPrimaryContainer,
-                        actionIconContentColor = LocalMaterialTheme.current.onPrimaryContainer,
-                        navigationIconContentColor = LocalMaterialTheme.current.onPrimaryContainer
                     ),
                     title = {
-                        val isRemotePlaybackActive by playerViewModel.isRemotePlaybackActive.collectAsState()
                         if (!isCastConnecting) {
                             AnimatedVisibility(visible = (!isRemotePlaybackActive)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -626,14 +719,14 @@ fun FullPlayerContent(
                                 modifier = Modifier
                                     .size(42.dp)
                                     .clip(CircleShape)
-                                    .background(LocalMaterialTheme.current.onPrimary)
+                                    .background(playerOnAccentColor.copy(alpha = 0.7f))
                                     .clickable(onClick = onCollapse),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     painter = painterResource(R.drawable.rounded_keyboard_arrow_down_24),
                                     contentDescription = "Colapsar",
-                                    tint = LocalMaterialTheme.current.primary
+                                    tint = playerAccentColor
                                 )
                             }
                         }
@@ -645,10 +738,6 @@ fun FullPlayerContent(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val isRemotePlaybackActive by playerViewModel.isRemotePlaybackActive.collectAsState()
-                            val selectedRouteName by playerViewModel.selectedRoute.map { it?.name }.collectAsState(initial = null)
-                            val isBluetoothEnabled by playerViewModel.isBluetoothEnabled.collectAsState()
-                            val bluetoothName by playerViewModel.bluetoothName.collectAsState()
                             val showCastLabel = isCastConnecting || (isRemotePlaybackActive && selectedRouteName != null)
                             val isBluetoothActive =
                                 isBluetoothEnabled && !bluetoothName.isNullOrEmpty() && !isRemotePlaybackActive && !isCastConnecting
@@ -676,7 +765,7 @@ fun FullPlayerContent(
                                 animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
                             )
                             val castContainerColor by animateColorAsState(
-                                targetValue = LocalMaterialTheme.current.onPrimary,
+                                targetValue = playerOnAccentColor.copy(alpha = 0.7f),
                                 animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
                             )
                             Box(
@@ -718,7 +807,7 @@ fun FullPlayerContent(
                                             isBluetoothActive -> "Bluetooth"
                                             else -> "Local playback"
                                         },
-                                        tint = LocalMaterialTheme.current.primary
+                                        tint = playerAccentColor
                                     )
                                     AnimatedVisibility(visible = showCastLabel) {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -742,7 +831,7 @@ fun FullPlayerContent(
                                                     Text(
                                                         text = label,
                                                         style = MaterialTheme.typography.labelMedium,
-                                                        color = LocalMaterialTheme.current.primary,
+                                                        color = playerAccentColor,
                                                         maxLines = 1,
                                                         overflow = TextOverflow.Ellipsis,
                                                         modifier = Modifier.weight(1f, fill = false)
@@ -752,7 +841,7 @@ fun FullPlayerContent(
                                                             modifier = Modifier
                                                                 .size(14.dp),
                                                             strokeWidth = 2.dp,
-                                                            color = LocalMaterialTheme.current.primary
+                                                            color = playerAccentColor
                                                         )
                                                     }
                                                     if (isRemotePlaybackActive && !isCastConnecting) {
@@ -760,7 +849,7 @@ fun FullPlayerContent(
                                                             modifier = Modifier
                                                                 .size(8.dp)
                                                                 .clip(CircleShape)
-                                                                .background(Color(0xFF38C450))
+                                                                .background(LocalMaterialTheme.current.onTertiaryContainer)
                                                         )
                                                     }
                                                 }
@@ -782,7 +871,7 @@ fun FullPlayerContent(
                                             bottomEnd = 50.dp
                                         )
                                     )
-                                    .background(LocalMaterialTheme.current.onPrimary)
+                                    .background(playerOnAccentColor.copy(alpha = 0.7f))
                                     .clickable {
                                         showSongInfoBottomSheet = true
                                         onShowQueueClicked()
@@ -792,7 +881,7 @@ fun FullPlayerContent(
                                 Icon(
                                     painter = painterResource(R.drawable.rounded_queue_music_24),
                                     contentDescription = "Song options",
-                                    tint = LocalMaterialTheme.current.primary
+                                    tint = playerAccentColor
                                 )
                             }
                         }
@@ -813,8 +902,8 @@ fun FullPlayerContent(
         exit = slideOutVertically(targetOffsetY = { it / 2 }) + fadeOut()
     ) {
         LyricsSheet(
-            stablePlayerStateFlow = playerViewModel.stablePlayerState,
-            playerUiStateFlow = playerViewModel.playerUiState,
+            stablePlayerStateFlow = playerViewModel.stablePlayerStateInfrequent,
+            playbackPositionFlow = playerViewModel.currentPlaybackPosition,
             lyricsSearchUiState = lyricsSearchUiState,
             resetLyricsForCurrentSong = {
                 showLyricsSheet = false
@@ -840,7 +929,19 @@ fun FullPlayerContent(
             onSeekTo = { playerViewModel.seekTo(it) },
             onPlayPause = {
                 playerViewModel.playPause()
-            }
+            },
+            onNext = onNext,
+            onPrev = onPrevious,
+            immersiveLyricsEnabled = immersiveLyricsEnabled,
+            immersiveLyricsTimeout = immersiveLyricsTimeout,
+            isImmersiveTemporarilyDisabled = isImmersiveTemporarilyDisabled,
+            onSetImmersiveTemporarilyDisabled = { playerViewModel.setImmersiveTemporarilyDisabled(it) },
+            isShuffleEnabled = isShuffleEnabled,
+            repeatMode = repeatMode,
+            isFavoriteProvider = isFavoriteProvider,
+            onShuffleToggle = onShuffleToggle,
+            onRepeatToggle = onRepeatToggle,
+            onFavoriteToggle = onFavoriteToggle
         )
     }
 
@@ -876,7 +977,7 @@ fun FullPlayerContent(
                             }
                     )
                     if (index != currentSongArtists.lastIndex) {
-                        HorizontalDivider(color = LocalMaterialTheme.current.onPrimaryContainer.copy(alpha = 0.08f))
+                        HorizontalDivider(color = LocalMaterialTheme.current.outlineVariant)
                     }
                 }
             }
@@ -896,6 +997,8 @@ private fun SongMetadataDisplaySection(
     artistTextColor: Color,
     gradientEdgeColor: Color,
     playerViewModel: PlayerViewModel,
+    chipColor: Color,
+    chipContentColor: Color,
     onClickLyrics: () -> Unit,
     showQueueButton: Boolean,
     onClickQueue: () -> Unit,
@@ -992,14 +1095,14 @@ private fun SongMetadataDisplaySection(
                                 bottomEnd = 6.dp
                             )
                         )
-                        .background(LocalMaterialTheme.current.onPrimary)
+                        .background(chipColor)
                         .clickable { onClickLyrics() },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.rounded_lyrics_24),
                         contentDescription = "Lyrics",
-                        tint = LocalMaterialTheme.current.primary
+                        tint = chipContentColor
                     )
                 }
                 Box(
@@ -1013,14 +1116,14 @@ private fun SongMetadataDisplaySection(
                                 bottomEnd = 50.dp
                             )
                         )
-                        .background(LocalMaterialTheme.current.onPrimary)
+                        .background(chipColor)
                         .clickable { onClickQueue() },
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.rounded_queue_music_24),
                         contentDescription = "Queue",
-                        tint = LocalMaterialTheme.current.primary
+                        tint = chipContentColor
                     )
                 }
             }
@@ -1030,8 +1133,8 @@ private fun SongMetadataDisplaySection(
                 modifier = Modifier
                     .size(width = 48.dp, height = 48.dp),
                 colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = LocalMaterialTheme.current.onPrimary,
-                    contentColor = LocalMaterialTheme.current.primary
+                    containerColor = chipColor,
+                    contentColor = chipContentColor
                 ),
                 onClick = onClickLyrics,
             ) {
@@ -1044,17 +1147,35 @@ private fun SongMetadataDisplaySection(
     }
 }
 
-fun formatAudioMetaString(mimeType: String?, bitrate: Int?, sampleRate: Int?): String {
-    val bitrate = bitrate?.div(1000) ?: 0       // convert to kb/s
-    val sampleRate = sampleRate ?: 0           // in Hz
+private fun formatAudioMetaLabel(mimeType: String?, bitrate: Int?, sampleRate: Int?): String? {
+    val formatLabel = mimeTypeToFormat(mimeType)
+        .takeIf { it != "-" }
+        ?.uppercase(Locale.getDefault())
 
-    return "${mimeTypeToFormat(mimeType)} \u25CF $bitrate kb/s \u25CF ${sampleRate / 1000.0} kHz"
+    val parts = buildList {
+        sampleRate?.takeIf { it > 0 }?.let { add(String.format(Locale.US, "%.1f kHz", it / 1000.0)) }
+        bitrate?.takeIf { it > 0 }?.let { bitrateValue ->
+            val kbpsLabel = "${bitrateValue / 1000} kbps"
+            if (formatLabel != null) {
+                add("$kbpsLabel \u2022 $formatLabel")
+            } else {
+                add(kbpsLabel)
+            }
+        } ?: formatLabel?.let { add(it) }
+    }
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" \u2022 ")
 }
 
 @Composable
 private fun PlayerProgressBarSection(
+    songId: String,
     currentPositionProvider: () -> Long,
     totalDurationValue: Long,
+    songDurationHintMs: Long,
+    audioMimeType: String?,
+    audioBitrate: Int?,
+    audioSampleRate: Int?,
+    showAudioFileInfo: Boolean,
     onSeek: (Long) -> Unit,
     expansionFractionProvider: () -> Float,
     isPlayingProvider: () -> Boolean,
@@ -1063,67 +1184,142 @@ private fun PlayerProgressBarSection(
     inactiveTrackColor: Color,
     thumbColor: Color,
     timeTextColor: Color,
+    allowRealtimeUpdates: Boolean = true,
     loadingTweaks: FullPlayerLoadingTweaks? = null,
     modifier: Modifier = Modifier
 ) {
     val expansionFraction = expansionFractionProvider()
-    val isExpanded = currentSheetState == PlayerSheetState.EXPANDED &&
-            expansionFraction >= 0.995f
+    val isVisible = expansionFraction > 0.01f
+    val isExpanded = currentSheetState == PlayerSheetState.EXPANDED && expansionFraction >= 0.995f
+    val shouldRunRealtimeUpdates = allowRealtimeUpdates && isVisible
 
-    val durationForCalc = totalDurationValue.coerceAtLeast(1L)
-    val rawPosition = currentPositionProvider()
-    val rawProgress = (rawPosition.coerceAtLeast(0) / durationForCalc.toFloat()).coerceIn(0f, 1f)
-
-    val (smoothProgress, _) = rememberSmoothProgress(
+    val reportedDuration = totalDurationValue.coerceAtLeast(0L)
+    val hintDuration = songDurationHintMs.coerceAtLeast(0L)
+    val displayDurationValue = when {
+        reportedDuration <= 0L && hintDuration <= 0L -> 0L
+        reportedDuration <= 0L -> hintDuration
+        hintDuration <= 0L -> reportedDuration
+        kotlin.math.abs(reportedDuration - hintDuration) <= 1500L -> reportedDuration
+        else -> minOf(reportedDuration, hintDuration)
+    }
+    val audioMetaLabel = remember(showAudioFileInfo, audioMimeType, audioBitrate, audioSampleRate) {
+        if (showAudioFileInfo) {
+            formatAudioMetaLabel(
+                mimeType = audioMimeType,
+                bitrate = audioBitrate,
+                sampleRate = audioSampleRate
+            )
+        } else {
+            null
+        }
+    }
+    var displayAudioMetaLabel by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(songId, audioMetaLabel, showAudioFileInfo) {
+        if (!showAudioFileInfo) {
+            displayAudioMetaLabel = null
+        } else if (!audioMetaLabel.isNullOrBlank()) {
+            displayAudioMetaLabel = audioMetaLabel
+        } else {
+            kotlinx.coroutines.delay(500)
+            displayAudioMetaLabel = null
+        }
+    }
+    val durationForCalc = displayDurationValue.coerceAtLeast(1L)
+    
+    // Pass isVisible to rememberSmoothProgress
+    val (smoothProgressState, _) = rememberSmoothProgress(
         isPlayingProvider = isPlayingProvider,
         currentPositionProvider = currentPositionProvider,
-        totalDuration = totalDurationValue,
-        sampleWhilePlayingMs = 200L,
-        sampleWhilePausedMs = 800L
+        totalDuration = displayDurationValue,
+        sampleWhilePlayingMs = if (isExpanded) 180L else 320L,
+        sampleWhilePausedMs = 800L,
+        isVisible = shouldRunRealtimeUpdates
     )
 
     var sliderDragValue by remember { mutableStateOf<Float?>(null) }
-    val interactionSource = remember { MutableInteractionSource() }
-
-    val targetProgress = sliderDragValue ?: if (isExpanded) rawProgress else smoothProgress
-
-    val animatedProgress = remember {
-        Animatable(targetProgress)
-    }
-
-    LaunchedEffect(targetProgress, sliderDragValue != null) {
-        val clampedTarget = targetProgress.coerceIn(0f, 1f)
-        if (sliderDragValue != null) {
-            animatedProgress.snapTo(clampedTarget)
-        } else {
-            animatedProgress.animateTo(
-                targetValue = clampedTarget,
-                animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing)
-            )
+    // Optimistic Seek: Holds the target position immediately after seek to prevent snap-back
+    var optimisticPosition by remember { mutableStateOf<Long?>(null) }
+    
+    // Clear optimistic position ONLY when the SMOOTH (visual) progress catches up
+    // using raw position causes a jump because smooth progress might lag behind raw.
+    LaunchedEffect(optimisticPosition) {
+        val target = optimisticPosition
+        if (target != null) {
+            val start = System.currentTimeMillis()
+            
+            while (optimisticPosition != null) {
+                // Check if the current VISUAL progress (smoothState) corresponds to the target
+                // We use the derived state value which falls back to smoothProgressState
+                val currentVisual = smoothProgressState.value
+                val currentVisualMs = (currentVisual * durationForCalc).toLong()
+                
+                // If visual is close enough (within 500ms visual distance)
+                if (kotlin.math.abs(currentVisualMs - target) < 500 || (System.currentTimeMillis() - start) > 2000) {
+                     optimisticPosition = null
+                }
+                kotlinx.coroutines.delay(50)
+            }
         }
     }
 
-    val effectiveProgress = animatedProgress.value
-    val effectivePosition = (effectiveProgress * durationForCalc).roundToLong().coerceIn(0L, totalDurationValue.coerceAtLeast(0L))
+    val interactionSource = remember { MutableInteractionSource() }
+    val shouldAnimateWavyProgress by remember(shouldRunRealtimeUpdates, isPlayingProvider) {
+        derivedStateOf { shouldRunRealtimeUpdates && isPlayingProvider() }
+    }
+
+    // Always drive the thumb from smoothed progress to avoid visual jumps from 500ms raw ticks.
+    val animatedProgressState = remember(
+        sliderDragValue,
+        optimisticPosition,
+        smoothProgressState,
+        durationForCalc
+    ) {
+        derivedStateOf {
+             if (sliderDragValue != null) {
+                 sliderDragValue!!
+             } else if (optimisticPosition != null) {
+                 (optimisticPosition!!.toFloat() / durationForCalc.toFloat()).coerceIn(0f, 1f)
+             } else {
+                 smoothProgressState.value
+             }
+        }
+    }
+
+    // No LaunchedEffect/snapshotFlow needed anymore. 
+    // smoothProgressState is already 60fps animated.
+
+    val effectivePositionState = remember(durationForCalc, animatedProgressState, isVisible, displayDurationValue) {
+        derivedStateOf {
+             val progress = animatedProgressState.value
+             (progress * durationForCalc).roundToLong().coerceIn(0L, displayDurationValue)
+        }
+    }
 
     val shouldDelay = loadingTweaks?.let { it.delayAll || it.delayProgressBar } ?: false
 
-    // Placeholder colors needed here too
-    val placeholderColor = LocalMaterialTheme.current.primary.copy(alpha = 0.08f)
-    val placeholderOnColor = LocalMaterialTheme.current.primary.copy(alpha = 0.04f)
+    val placeholderColor = LocalMaterialTheme.current.onPrimaryContainer.copy(alpha = 0.25f)
+    val placeholderOnColor = LocalMaterialTheme.current.onPrimaryContainer.copy(alpha = 0.2f)
 
     DelayedContent(
         shouldDelay = shouldDelay,
         showPlaceholders = loadingTweaks?.showPlaceholders ?: false,
+        applyPlaceholderDelayOnClose = loadingTweaks?.applyPlaceholdersOnClose ?: true,
+        sharedBoundsModifier = Modifier.fillMaxWidth().heightIn(min = 70.dp),
         expansionFractionProvider = expansionFractionProvider,
         isExpandedOverride = currentSheetState == PlayerSheetState.EXPANDED,
         normalStartThreshold = 0.08f,
-        delayAppearThreshold = (loadingTweaks?.contentAppearThresholdPercent ?: 100) / 100f,
+        delayAppearThreshold = (loadingTweaks?.contentAppearThresholdPercent ?: 0) / 100f,
+        delayCloseThreshold = 1f - ((loadingTweaks?.contentCloseThresholdPercent ?: 0) / 100f),
         placeholder = {
              if (loadingTweaks?.transparentPlaceholders == true) {
                  Box(Modifier.fillMaxWidth().heightIn(min = 70.dp))
              } else {
-                 ProgressPlaceholder(expansionFractionProvider(), placeholderColor, placeholderOnColor)
+                 ProgressPlaceholder(
+                     expansionFraction = expansionFraction,
+                     color = placeholderColor,
+                     onColor = placeholderOnColor,
+                     showAudioMetaChip = showAudioFileInfo && !displayAudioMetaLabel.isNullOrBlank()
+                 )
              }
         }
     ) {
@@ -1133,45 +1329,127 @@ private fun PlayerProgressBarSection(
                 .padding(vertical = lerp(2.dp, 0.dp, expansionFraction))
                 .heightIn(min = 70.dp)
         ) {
-            WavyMusicSlider(
-                value = effectiveProgress,
-                onValueChange = { newValue -> sliderDragValue = newValue },
+            
+            // Isolated Slider Component
+            EfficientSlider(
+                valueState = animatedProgressState,
+                onValueChange = { sliderDragValue = it },
                 onValueChangeFinished = {
                     sliderDragValue?.let { finalValue ->
-                        onSeek((finalValue * durationForCalc).roundToLong())
+                        val targetMs = (finalValue * durationForCalc).roundToLong()
+                        optimisticPosition = targetMs
+                        onSeek(targetMs)
                     }
                     sliderDragValue = null
                 },
-                interactionSource = interactionSource,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                trackHeight = 6.dp,
-                thumbRadius = 8.dp,
+                thumbColor = thumbColor,
                 activeTrackColor = activeTrackColor,
                 inactiveTrackColor = inactiveTrackColor,
-                thumbColor = thumbColor,
-                waveLength = 30.dp,
-                isPlaying = (isPlayingProvider() && isExpanded),
-                isWaveEligible = isExpanded
+                interactionSource = interactionSource,
+                isPlaying = shouldAnimateWavyProgress
             )
 
-            Row(
+            // Isolated Time Labels
+            EfficientTimeLabels(
+                positionState = effectivePositionState,
+                duration = displayDurationValue,
+                isVisible = isVisible,
+                textColor = timeTextColor,
+                audioMetaLabel = displayAudioMetaLabel
+            )
+        }
+    }
+}
+
+@Composable
+private fun EfficientSlider(
+    valueState: androidx.compose.runtime.State<Float>,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+    thumbColor: Color,
+    activeTrackColor: Color,
+    inactiveTrackColor: Color,
+    interactionSource: MutableInteractionSource,
+    isPlaying: Boolean // Added parameter
+) {
+    WavySliderExpressive(
+        value = valueState.value,
+        onValueChange = onValueChange,
+        onValueChangeFinished = onValueChangeFinished,
+        activeTrackColor = activeTrackColor,
+        inactiveTrackColor = inactiveTrackColor,
+        thumbColor = thumbColor,
+        isPlaying = isPlaying,
+        semanticsLabel = "Playback position",
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp, horizontal = 0.dp)
+    )
+}
+
+@Composable
+private fun EfficientTimeLabels(
+    positionState: androidx.compose.runtime.State<Long>,
+    duration: Long,
+    isVisible: Boolean,
+    textColor: Color,
+    audioMetaLabel: String?
+) {
+    val coarsePositionMs by remember(isVisible, positionState) {
+        derivedStateOf {
+            if (!isVisible) 0L
+            else (positionState.value.coerceAtLeast(0L) / 1000L) * 1000L
+        }
+    }
+    val posStr by remember(isVisible, coarsePositionMs) {
+        derivedStateOf { if (isVisible) formatDuration(coarsePositionMs) else "--:--" }
+    }
+    val durStr = remember(isVisible, duration) {
+        if (isVisible) formatDuration(duration.coerceAtLeast(0L)) else "--:--"
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.Center),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                posStr,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                color = textColor
+            )
+            Text(
+                durStr,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                color = textColor
+            )
+        }
+
+        if (!audioMetaLabel.isNullOrBlank()) {
+            Surface(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .align(Alignment.Center)
+                    .padding(horizontal = 58.dp),
+                shape = RoundedCornerShape(999.dp),
+                color = textColor.copy(alpha = 0.14f),
+                contentColor = textColor.copy(alpha = 0.96f)
             ) {
                 Text(
-                    formatDuration(effectivePosition),
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                    color = timeTextColor
-                )
-                Text(
-                    formatDuration(totalDurationValue),
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-                    color = timeTextColor
+                    text = audioMetaLabel,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Medium,
+                        fontSize = 11.sp
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
                 )
             }
         }
@@ -1182,61 +1460,133 @@ private fun PlayerProgressBarSection(
 private fun DelayedContent(
     shouldDelay: Boolean,
     showPlaceholders: Boolean,
+    applyPlaceholderDelayOnClose: Boolean,
+    sharedBoundsModifier: Modifier = Modifier,
     expansionFractionProvider: () -> Float,
     isExpandedOverride: Boolean = false,
     normalStartThreshold: Float,
     delayAppearThreshold: Float,
+    delayCloseThreshold: Float,
     placeholder: @Composable () -> Unit,
     content: @Composable () -> Unit
 ) {
-    // Some carousel styles (e.g., one-peek) can leave the sheet fraction just shy of 1f when reopening
-    // the player, which kept delayed sections stuck on placeholders. Treat near-complete expansion as
-    // fully expanded to ensure content becomes visible without needing an extra interaction.
-    val expansionFraction by remember {
+    val rawExpansionFraction by remember {
         derivedStateOf {
-            val raw = expansionFractionProvider().coerceIn(0f, 1f)
-            if (isExpandedOverride) 1f else raw
+            expansionFractionProvider().coerceIn(0f, 1f)
         }
     }
-    val easedExpansionFraction by remember {
-        derivedStateOf { if (expansionFraction >= 0.985f || isExpandedOverride) 1f else expansionFraction }
+    // Some carousel styles can leave the fraction just shy of 1f at rest.
+    val effectiveExpansionFraction by remember {
+        derivedStateOf {
+            if (isExpandedOverride && rawExpansionFraction >= 0.985f) 1f else rawExpansionFraction
+        }
+    }
+    var previousExpansionFraction by remember { mutableStateOf(rawExpansionFraction) }
+    var previousExpandedOverride by remember { mutableStateOf(isExpandedOverride) }
+    val isCollapsingByFraction = rawExpansionFraction < previousExpansionFraction - 0.001f
+    val isExpandingByFraction = rawExpansionFraction > previousExpansionFraction + 0.001f
+    val justStartedCollapsing = previousExpandedOverride && !isExpandedOverride
+    val justStartedExpanding = !previousExpandedOverride && isExpandedOverride
+    val isCollapsing = isCollapsingByFraction || justStartedCollapsing
+    val isExpanding = isExpandingByFraction || justStartedExpanding
+
+    LaunchedEffect(rawExpansionFraction, isExpandedOverride) {
+        previousExpansionFraction = rawExpansionFraction
+        previousExpandedOverride = isExpandedOverride
     }
 
-    val isDelayGateOpen by remember(shouldDelay, delayAppearThreshold, isExpandedOverride) {
-        derivedStateOf {
-            !shouldDelay || isExpandedOverride || easedExpansionFraction >= delayAppearThreshold.coerceIn(0f, 1f)
+    val appearThreshold = delayAppearThreshold.coerceIn(0f, 1f)
+    val closeThreshold = delayCloseThreshold.coerceIn(0f, 1f)
+    val isFullyExpanded = isExpandedOverride && effectiveExpansionFraction >= 0.985f
+    var isDelayGateOpen by remember(shouldDelay) { mutableStateOf(!shouldDelay) }
+
+    LaunchedEffect(
+        shouldDelay,
+        appearThreshold,
+        closeThreshold,
+        effectiveExpansionFraction,
+        applyPlaceholderDelayOnClose,
+        isCollapsing,
+        isExpanding,
+        isExpandedOverride,
+        isFullyExpanded
+    ) {
+        if (!shouldDelay) {
+            isDelayGateOpen = true
+            return@LaunchedEffect
+        }
+
+        if (effectiveExpansionFraction <= 0.001f && !isExpandedOverride) {
+            isDelayGateOpen = false
+            return@LaunchedEffect
+        }
+
+        // Keep gate open only when truly expanded, so delay toggles still apply during opening motion.
+        if (isFullyExpanded) {
+            isDelayGateOpen = true
+            return@LaunchedEffect
+        }
+
+        if (isDelayGateOpen) {
+            if (applyPlaceholderDelayOnClose && isCollapsing && effectiveExpansionFraction <= closeThreshold) {
+                isDelayGateOpen = false
+            }
+        } else if (
+            effectiveExpansionFraction >= appearThreshold &&
+                (!applyPlaceholderDelayOnClose || isExpanding || isExpandedOverride)
+        ) {
+            isDelayGateOpen = true
         }
     }
 
-    val baseAlpha by remember(normalStartThreshold, isExpandedOverride) {
+    val baseAlpha by remember(normalStartThreshold, effectiveExpansionFraction) {
         derivedStateOf {
-            val effectiveFraction = if (isExpandedOverride) 1f else easedExpansionFraction
-            ((effectiveFraction - normalStartThreshold) / (1f - normalStartThreshold)).coerceIn(0f, 1f)
+            ((effectiveExpansionFraction - normalStartThreshold) / (1f - normalStartThreshold))
+                .coerceIn(0f, 1f)
         }
     }
+    val contentBlendAlpha by animateFloatAsState(
+        targetValue = if (isDelayGateOpen) 1f else 0f,
+        animationSpec = if (isDelayGateOpen) {
+            tween(durationMillis = 260, easing = FastOutSlowInEasing)
+        } else {
+            tween(durationMillis = 140, easing = FastOutSlowInEasing)
+        },
+        label = "DelayedContentBlendAlpha"
+    )
+    val placeholderBlendAlpha by animateFloatAsState(
+        targetValue = if (isDelayGateOpen) 0f else 1f,
+        animationSpec = if (isDelayGateOpen) {
+            tween(durationMillis = 360, easing = FastOutSlowInEasing)
+        } else {
+            tween(durationMillis = 140, easing = FastOutSlowInEasing)
+        },
+        label = "DelayedPlaceholderBlendAlpha"
+    )
 
     if (shouldDelay) {
-        Crossfade(
-            targetState = isDelayGateOpen,
-            label = "DelayedContentCrossfade"
-        ) { gateOpen ->
-            if (gateOpen) {
+        Box(modifier = sharedBoundsModifier) {
+            val effectiveContentAlpha = (contentBlendAlpha * baseAlpha).coerceIn(0f, 1f)
+            val shouldComposeContent = isDelayGateOpen
+
+            if (shouldComposeContent) {
                 Box(
-                    modifier = Modifier.graphicsLayer {
-                        alpha = baseAlpha
-                    }
+                    modifier = Modifier.graphicsLayer { alpha = effectiveContentAlpha }
                 ) {
                     content()
                 }
-            } else if (showPlaceholders) {
-                placeholder()
+            }
+            if (showPlaceholders && placeholderBlendAlpha > 0.001f) {
+                Box(
+                    modifier = Modifier.graphicsLayer { alpha = placeholderBlendAlpha }
+                ) {
+                    placeholder()
+                }
             }
         }
     } else {
         Box(
-            modifier = Modifier.graphicsLayer {
-                alpha = baseAlpha
-            }
+            modifier = sharedBoundsModifier.graphicsLayer { alpha = baseAlpha }
         ) {
             content()
         }
@@ -1260,6 +1610,9 @@ private fun PlayerSongInfo(
 ) {
     val coroutineScope = rememberCoroutineScope()
     var isNavigatingToArtist by remember { mutableStateOf(false) }
+    val resolvedArtistId by remember(artists, artistId) {
+        derivedStateOf { artists.firstOrNull { it.id > 0L }?.id ?: artistId }
+    }
     val titleStyle = MaterialTheme.typography.headlineSmall.copy(
         fontWeight = FontWeight.Bold,
         fontFamily = GoogleSansRounded,
@@ -1274,7 +1627,7 @@ private fun PlayerSongInfo(
     Column(
         horizontalAlignment = Alignment.Start,
             modifier = modifier
-                .padding(vertical = 10.dp)
+                .padding(vertical = 4.dp)
                 .fillMaxWidth()
             .graphicsLayer {
                 val fraction = expansionFractionProvider()
@@ -1295,7 +1648,7 @@ private fun PlayerSongInfo(
             expansionFractionProvider,
             modifier = Modifier.fillMaxWidth()
         )
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(2.dp))
 
 
 
@@ -1320,18 +1673,19 @@ private fun PlayerSongInfo(
                             }
                         }
                     },
-                    onLongClick = {
-                        if (isNavigatingToArtist) return@combinedClickable
-                        coroutineScope.launch {
-                            isNavigatingToArtist = true
-                            try {
-                                playerViewModel.triggerArtistNavigationFromPlayer(artistId)
-                            } finally {
-                                isNavigatingToArtist = false
-                            }
+
+                onLongClick = {
+                    if (isNavigatingToArtist) return@combinedClickable
+                    coroutineScope.launch {
+                        isNavigatingToArtist = true
+                        try {
+                            playerViewModel.triggerArtistNavigationFromPlayer(resolvedArtistId)
+                        } finally {
+                            isNavigatingToArtist = false
                         }
                     }
-                )
+                }
+            )
         )
     }
 }
@@ -1351,9 +1705,14 @@ private fun PlaceholderBox(
 }
 
 @Composable
-private fun AlbumPlaceholder(height: Dp, color: Color, onColor: Color) {
+private fun AlbumPlaceholder(
+    height: Dp,
+    color: Color,
+    onColor: Color,
+    modifier: Modifier = Modifier
+) {
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(height),
         shape = RoundedCornerShape(18.dp),
@@ -1372,125 +1731,256 @@ private fun AlbumPlaceholder(height: Dp, color: Color, onColor: Color) {
 }
 
 @Composable
-private fun MetadataPlaceholder(expansionFraction: Float, color: Color, onColor: Color) {
+private fun MetadataPlaceholder(
+    expansionFraction: Float,
+    color: Color,
+    onColor: Color,
+    showQueueButtons: Boolean
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 70.dp)
-            // Removed vertical padding lerp to match real content's 70dp heightIn exactly
-            .padding(start = 4.dp, end = 4.dp),
+            .graphicsLayer {
+                alpha = expansionFraction.coerceIn(0f, 1f)
+                translationY = (1f - expansionFraction.coerceIn(0f, 1f)) * 24f
+            },
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Column(
             modifier = Modifier
-                .weight(0.85f)
-                .fillMaxWidth(0.9f)
+                .weight(1f)
                 .align(Alignment.CenterVertically),
-            verticalArrangement = Arrangement.spacedBy(10.dp) // Adjusted spacing to match visual density
+            verticalArrangement = Arrangement.spacedBy(6.dp) //2.dp
         ) {
             PlaceholderBox(
                 modifier = Modifier
-                    .fillMaxWidth(0.7f) // Simulate title length
-                    .height(24.dp),
-                cornerRadius = 4.dp,
+                    .fillMaxWidth(0.72f)
+                    .height(27.dp), //30.dp
+                cornerRadius = 8.dp,
                 color = color
             )
             PlaceholderBox(
                 modifier = Modifier
-                    .fillMaxWidth(0.4f) // Simulate artist length
-                    .height(16.dp),
-                cornerRadius = 4.dp,
+                    .fillMaxWidth(0.46f)
+                    .height(17.dp), //20.dp
+                cornerRadius = 8.dp,
                 color = onColor
             )
         }
-        Spacer(modifier = Modifier.width(8.dp))
-        PlaceholderBox(
-            modifier = Modifier
-                .size(42.dp),
-            cornerRadius = 50.dp,
-            color = onColor
-        )
+
+        if (showQueueButtons) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    modifier = Modifier.size(height = 42.dp, width = 50.dp),
+                    shape = RoundedCornerShape(
+                        topStart = 50.dp,
+                        topEnd = 6.dp,
+                        bottomStart = 50.dp,
+                        bottomEnd = 6.dp
+                    ),
+                    color = onColor,
+                    tonalElevation = 0.dp
+                ) {}
+                Surface(
+                    modifier = Modifier.size(height = 42.dp, width = 50.dp),
+                    shape = RoundedCornerShape(
+                        topStart = 6.dp,
+                        topEnd = 50.dp,
+                        bottomStart = 6.dp,
+                        bottomEnd = 50.dp
+                    ),
+                    color = onColor,
+                    tonalElevation = 0.dp
+                ) {}
+            }
+        } else {
+            PlaceholderBox(
+                modifier = Modifier.size(width = 48.dp, height = 48.dp),
+                cornerRadius = 24.dp,
+                color = onColor
+            )
+        }
     }
 }
 
 @Composable
-private fun ProgressPlaceholder(expansionFraction: Float, color: Color, onColor: Color) {
+private fun ProgressPlaceholder(
+    expansionFraction: Float,
+    color: Color,
+    onColor: Color,
+    showAudioMetaChip: Boolean
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .graphicsLayer { alpha = expansionFraction }
-            .heightIn(min = 70.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .heightIn(min = 70.dp)
+            .padding(vertical = lerp(2.dp, 0.dp, expansionFraction.coerceIn(0f, 1f))),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp)
+                .padding(vertical = 8.dp),
+            contentAlignment = Alignment.CenterStart
         ) {
             PlaceholderBox(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(6.dp), // Match WavySlider track height
+                    .height(6.dp),
+                cornerRadius = 3.dp,
+                color = onColor.copy(alpha = 0.15f)
+            )
+            // Keep active segment in the layout tree but invisible to avoid visual noise.
+            PlaceholderBox(
+                modifier = Modifier
+                    .fillMaxWidth(0.34f)
+                    .height(6.dp)
+                    .graphicsLayer { alpha = 0f },
                 cornerRadius = 3.dp,
                 color = color
             )
+            // Keep thumb slot aligned but fully transparent.
+            PlaceholderBox(
+                modifier = Modifier
+                    .padding(start = 92.dp)
+                    .size(14.dp)
+                    .graphicsLayer { alpha = 0f },
+                cornerRadius = 7.dp,
+                color = onColor
+            )
         }
-        Row(
+
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
+                .padding(horizontal = 4.dp)
         ) {
-            PlaceholderBox(modifier = Modifier.width(30.dp).height(12.dp), cornerRadius = 2.dp, color = onColor)
-            PlaceholderBox(modifier = Modifier.width(30.dp).height(12.dp), cornerRadius = 2.dp, color = onColor)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.Center),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PlaceholderBox(
+                    modifier = Modifier
+                        .width(34.dp)
+                        .height(12.dp),
+                    cornerRadius = 2.dp,
+                    color = onColor
+                )
+                PlaceholderBox(
+                    modifier = Modifier
+                        .width(34.dp)
+                        .height(12.dp),
+                    cornerRadius = 2.dp,
+                    color = onColor
+                )
+            }
+
+            if (showAudioMetaChip) {
+                PlaceholderBox(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .widthIn(min = 96.dp, max = 180.dp)
+                        .height(18.dp),
+                    cornerRadius = 999.dp,
+                    color = onColor.copy(alpha = 0.15f)
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun ControlsPlaceholder(color: Color, onColor: Color) {
-    Box(
-        modifier = Modifier.fillMaxWidth()
+    val rowCorners = 60.dp
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Box(
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .fillMaxWidth()
+                .height(80.dp)
         ) {
-            // Main Controls Row
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PlaceholderBox(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    cornerRadius = 60.dp,
+                    color = onColor
+                )
+                Surface(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    shape = AbsoluteSmoothCornerShape(
+                        cornerRadiusTL = rowCorners,
+                        smoothnessAsPercentTR = 60,
+                        cornerRadiusBL = rowCorners,
+                        smoothnessAsPercentTL = 60,
+                        cornerRadiusTR = rowCorners,
+                        smoothnessAsPercentBL = 60,
+                        cornerRadiusBR = rowCorners,
+                        smoothnessAsPercentBR = 60
+                    ),
+                    color = color,
+                    tonalElevation = 0.dp
+                ) {}
+                PlaceholderBox(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    cornerRadius = 60.dp,
+                    color = onColor
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 66.dp, max = 86.dp)
+                .padding(horizontal = 26.dp)
+                .padding(bottom = 6.dp)
+                .background(
+                    color = onColor.copy(alpha = 0.1f),
+                    shape = RoundedCornerShape(rowCorners)
+                ),
+            contentAlignment = Alignment.Center
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(80.dp)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                    .padding(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                 // 5 buttons: Prev, Play/Pause, Next + 2 smaller extras
-                 // Size order: 42, 42, 64, 42, 42
-                 val sizes = listOf(42.dp, 42.dp, 64.dp, 42.dp, 42.dp)
-                 sizes.forEach { size ->
-                     PlaceholderBox(
-                         modifier = Modifier.size(size),
-                         cornerRadius = size / 2, // Circle
-                         color = if (size == 64.dp) color else onColor
-                     )
-                 }
+                repeat(3) {
+                    PlaceholderBox(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                        cornerRadius = rowCorners,
+                        color = onColor.copy(alpha = 0.1f)
+                    )
+                }
             }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Toggles Row
-            PlaceholderBox(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(60.dp) // Avg between min 58 and max 78
-                    .padding(horizontal = 26.dp)
-                    .padding(bottom = 6.dp),
-                cornerRadius = 30.dp,
-                color = onColor
-            )
         }
     }
 }
@@ -1507,11 +1997,13 @@ private fun BottomToggleRow(
 ) {
     val isFavorite = isFavoriteProvider()
     val rowCorners = 60.dp
-    val inactiveBg = LocalMaterialTheme.current.primary.copy(alpha = 0.08f)
+    val inactiveBg = LocalMaterialTheme.current.onSurface.copy(alpha = 0.07f)
+    val inactiveContentColor = LocalMaterialTheme.current.onSurface
+
 
     Box(
         modifier = modifier.background(
-            color = LocalMaterialTheme.current.onPrimary,
+            color = LocalMaterialTheme.current.surfaceContainerLowest.copy(alpha = 0.7f),
             shape = AbsoluteSmoothCornerShape(
                 cornerRadiusBL = rowCorners,
                 smoothnessAsPercentTR = 60,
@@ -1527,7 +2019,7 @@ private fun BottomToggleRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(10.dp)
+                .padding(6.dp)
                 .clip(
                     AbsoluteSmoothCornerShape(
                         cornerRadiusBL = rowCorners,
@@ -1541,7 +2033,7 @@ private fun BottomToggleRow(
                     )
                 )
                 .background(Color.Transparent),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             val commonModifier = Modifier.weight(1f)
@@ -1553,6 +2045,7 @@ private fun BottomToggleRow(
                 activeCornerRadius = rowCorners,
                 activeContentColor = LocalMaterialTheme.current.onPrimary,
                 inactiveColor = inactiveBg,
+                inactiveContentColor = inactiveContentColor,
                 onClick = onShuffleToggle,
                 iconId = R.drawable.rounded_shuffle_24,
                 contentDesc = "Aleatorio"
@@ -1570,6 +2063,7 @@ private fun BottomToggleRow(
                 activeCornerRadius = rowCorners,
                 activeContentColor = LocalMaterialTheme.current.onSecondary,
                 inactiveColor = inactiveBg,
+                inactiveContentColor = inactiveContentColor,
                 onClick = onRepeatToggle,
                 iconId = repeatIcon,
                 contentDesc = "Repetir"
@@ -1581,50 +2075,11 @@ private fun BottomToggleRow(
                 activeCornerRadius = rowCorners,
                 activeContentColor = LocalMaterialTheme.current.onTertiary,
                 inactiveColor = inactiveBg,
+                inactiveContentColor = inactiveContentColor,
                 onClick = onFavoriteToggle,
                 iconId = R.drawable.round_favorite_24,
                 contentDesc = "Favorito"
             )
         }
-    }
-}
-
-@Composable
-fun ToggleSegmentButton(
-    modifier: Modifier,
-    active: Boolean,
-    activeColor: Color,
-    inactiveColor: Color = Color.Gray,
-    activeContentColor: Color = LocalMaterialTheme.current.onPrimary,
-    activeCornerRadius: Dp = 8.dp,
-    onClick: () -> Unit,
-    iconId: Int,
-    contentDesc: String
-) {
-    val bgColor by animateColorAsState(
-        targetValue = if (active) activeColor else inactiveColor,
-        animationSpec = tween(durationMillis = 250),
-        label = ""
-    )
-    val cornerRadius by animateDpAsState(
-        targetValue = if (active) activeCornerRadius else 8.dp,
-        animationSpec = spring(stiffness = Spring.StiffnessLow),
-        label = ""
-    )
-
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .clip(RoundedCornerShape(cornerRadius))
-            .background(bgColor)
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            painter = painterResource(iconId),
-            contentDescription = contentDesc,
-            tint = if (active) activeContentColor else LocalMaterialTheme.current.primary,
-            modifier = Modifier.size(24.dp)
-        )
     }
 }

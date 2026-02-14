@@ -59,6 +59,7 @@ import com.theveloper.pixelplay.presentation.viewmodel.PlayerSheetState
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistViewModel
 import com.theveloper.pixelplay.utils.shapes.RoundedStarShape
 import kotlinx.coroutines.launch
+import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
 import kotlin.math.roundToInt
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -78,7 +79,7 @@ fun ArtistDetailScreen(
     playlistViewModel: PlaylistViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val stablePlayerState by playerViewModel.stablePlayerState.collectAsState()
+    val stablePlayerState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
     val playerSheetState by playerViewModel.sheetState.collectAsState()
     val lazyListState = rememberLazyListState()
     val favoriteIds by playerViewModel.favoriteSongIds.collectAsState()
@@ -103,10 +104,10 @@ fun ArtistDetailScreen(
     val maxTopBarHeightPx = with(density) { maxTopBarHeight.toPx() }
 
     val topBarHeight = remember { Animatable(maxTopBarHeightPx) }
-    var collapseFraction by remember { mutableFloatStateOf(0f) }
-
-    LaunchedEffect(topBarHeight.value) {
-        collapseFraction = 1f - ((topBarHeight.value - minTopBarHeightPx) / (maxTopBarHeightPx - minTopBarHeightPx)).coerceIn(0f, 1f)
+    val collapseFraction by remember {
+        derivedStateOf {
+            1f - ((topBarHeight.value - minTopBarHeightPx) / (maxTopBarHeightPx - minTopBarHeightPx)).coerceIn(0f, 1f)
+        }
     }
 
     val nestedScrollConnection = remember {
@@ -275,8 +276,8 @@ fun ArtistDetailScreen(
     if (showSongInfoBottomSheet && selectedSongForInfo != null) {
         val currentSong = selectedSongForInfo
         val isFavorite = remember(currentSong?.id, favoriteIds) {
-            derivedStateOf { currentSong?.let { favoriteIds.contains(it.id) } }
-        }.value ?: false
+            currentSong?.let { favoriteIds.contains(it.id) } ?: false
+        }
 
         if (currentSong != null) {
             val removeFromListTrigger = remember(uiState.songs) {
@@ -328,7 +329,7 @@ fun ArtistDetailScreen(
 
                 PlaylistBottomSheet(
                     playlistUiState = playlistUiState,
-                    song = currentSong,
+                    songs = listOf(currentSong),
                     onDismiss = { showPlaylistBottomSheet = false },
                     bottomBarHeight = bottomBarHeightDp,
                     playerViewModel = playerViewModel,
@@ -439,6 +440,7 @@ private fun CustomCollapsingTopBar(
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
                         .data(artist.imageUrl)
+                        .size(600, 600)
                         .crossfade(true)
                         .build(),
                     contentDescription = artist.name,

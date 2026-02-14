@@ -1,13 +1,24 @@
 package com.theveloper.pixelplay.presentation.viewmodel
 
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.theveloper.pixelplay.data.backup.BackupManager
+import com.theveloper.pixelplay.data.backup.model.BackupSection
+import com.theveloper.pixelplay.data.backup.model.BackupOperationType
+import com.theveloper.pixelplay.data.backup.model.BackupTransferProgressUpdate
+import com.theveloper.pixelplay.data.backup.model.BackupHistoryEntry
+import com.theveloper.pixelplay.data.backup.model.RestorePlan
+import com.theveloper.pixelplay.data.backup.model.RestoreResult
+import com.theveloper.pixelplay.data.backup.model.ValidationError
 import com.theveloper.pixelplay.data.preferences.AppThemeMode
 import com.theveloper.pixelplay.data.preferences.CarouselStyle
 import com.theveloper.pixelplay.data.preferences.LibraryNavigationMode
 import com.theveloper.pixelplay.data.preferences.ThemePreference
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
+import com.theveloper.pixelplay.data.preferences.AlbumArtQuality
+import com.theveloper.pixelplay.data.preferences.AlbumArtPaletteStyle
 import com.theveloper.pixelplay.data.preferences.FullPlayerLoadingTweaks
 import com.theveloper.pixelplay.data.repository.LyricsRepository
 import com.theveloper.pixelplay.data.repository.MusicRepository
@@ -18,6 +29,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -32,6 +44,7 @@ data class SettingsUiState(
     val isLoadingDirectories: Boolean = false,
     val appThemeMode: String = AppThemeMode.FOLLOW_SYSTEM,
     val playerThemePreference: String = ThemePreference.ALBUM_ART,
+    val albumArtPaletteStyle: AlbumArtPaletteStyle = AlbumArtPaletteStyle.default,
     val mockGenresEnabled: Boolean = false,
     val navBarCornerRadius: Int = 32,
     val navBarStyle: String = NavBarStyle.DEFAULT,
@@ -44,6 +57,7 @@ data class SettingsUiState(
     val isCrossfadeEnabled: Boolean = true,
     val crossfadeDuration: Int = 6000,
     val persistentShuffleEnabled: Boolean = false,
+    val folderBackGestureNavigation: Boolean = false,
     val lyricsSourcePreference: LyricsSourcePreference = LyricsSourcePreference.EMBEDDED_FIRST,
     val autoScanLrcFiles: Boolean = false,
     val blockedDirectories: Set<String> = emptySet(),
@@ -51,7 +65,21 @@ data class SettingsUiState(
     val isLoadingModels: Boolean = false,
     val modelsFetchError: String? = null,
     val appRebrandDialogShown: Boolean = false,
-    val fullPlayerLoadingTweaks: FullPlayerLoadingTweaks = FullPlayerLoadingTweaks()
+    val fullPlayerLoadingTweaks: FullPlayerLoadingTweaks = FullPlayerLoadingTweaks(),
+    val showPlayerFileInfo: Boolean = true,
+    val usePlayerSheetV2: Boolean = false,
+    // Developer Options
+    val albumArtQuality: AlbumArtQuality = AlbumArtQuality.MEDIUM,
+    val tapBackgroundClosesPlayer: Boolean = true,
+    val hapticsEnabled: Boolean = true,
+    val immersiveLyricsEnabled: Boolean = false,
+    val immersiveLyricsTimeout: Long = 4000L,
+    val backupInfoDismissed: Boolean = false,
+    val isDataTransferInProgress: Boolean = false,
+    val restorePlan: RestorePlan? = null,
+    val backupHistory: List<BackupHistoryEntry> = emptyList(),
+    val backupValidationErrors: List<ValidationError> = emptyList(),
+    val isInspectingBackup: Boolean = false
 )
 
 data class FailedSongInfo(
@@ -80,12 +108,14 @@ private sealed interface SettingsUiUpdate {
         val appRebrandDialogShown: Boolean,
         val appThemeMode: String,
         val playerThemePreference: String,
+        val albumArtPaletteStyle: AlbumArtPaletteStyle,
         val mockGenresEnabled: Boolean,
         val navBarCornerRadius: Int,
         val navBarStyle: String,
         val libraryNavigationMode: String,
         val carouselStyle: String,
-        val launchTab: String
+        val launchTab: String,
+        val showPlayerFileInfo: Boolean
     ) : SettingsUiUpdate
     
     data class Group2(
@@ -95,9 +125,13 @@ private sealed interface SettingsUiUpdate {
         val isCrossfadeEnabled: Boolean,
         val crossfadeDuration: Int,
         val persistentShuffleEnabled: Boolean,
+        val folderBackGestureNavigation: Boolean,
         val lyricsSourcePreference: LyricsSourcePreference,
         val autoScanLrcFiles: Boolean,
-        val blockedDirectories: Set<String>
+        val blockedDirectories: Set<String>,
+        val hapticsEnabled: Boolean,
+        val immersiveLyricsEnabled: Boolean,
+        val immersiveLyricsTimeout: Long
     ) : SettingsUiUpdate
 }
 
@@ -108,6 +142,7 @@ class SettingsViewModel @Inject constructor(
     private val geminiModelService: GeminiModelService,
     private val lyricsRepository: LyricsRepository,
     private val musicRepository: MusicRepository,
+    private val backupManager: BackupManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -133,6 +168,8 @@ class SettingsViewModel @Inject constructor(
     val isLoadingDirectories = fileExplorerStateHolder.isLoading
     val isExplorerPriming = fileExplorerStateHolder.isPrimingExplorer
     val isExplorerReady = fileExplorerStateHolder.isExplorerReady
+    private var hasPendingDirectoryRuleChanges = false
+    private var latestDirectoryRuleUpdateJob: Job? = null
 
     val isSyncing: StateFlow<Boolean> = syncManager.isSyncing
         .stateIn(
@@ -148,6 +185,20 @@ class SettingsViewModel @Inject constructor(
             initialValue = SyncProgress()
         )
 
+    private val _dataTransferEvents = MutableSharedFlow<String>()
+    val dataTransferEvents: SharedFlow<String> = _dataTransferEvents.asSharedFlow()
+
+    init {
+        viewModelScope.launch {
+            backupManager.getBackupHistory().collect { history ->
+                _uiState.update { it.copy(backupHistory = history) }
+            }
+        }
+    }
+
+    private val _dataTransferProgress = MutableStateFlow<BackupTransferProgressUpdate?>(null)
+    val dataTransferProgress: StateFlow<BackupTransferProgressUpdate?> = _dataTransferProgress.asStateFlow()
+
     init {
         // Consolidated collectors using combine() to reduce coroutine overhead
         // Instead of 20 separate coroutines, we use 2 combined flows
@@ -158,23 +209,27 @@ class SettingsViewModel @Inject constructor(
                 userPreferencesRepository.appRebrandDialogShownFlow,
                 userPreferencesRepository.appThemeModeFlow,
                 userPreferencesRepository.playerThemePreferenceFlow,
+                userPreferencesRepository.albumArtPaletteStyleFlow,
                 userPreferencesRepository.mockGenresEnabledFlow,
                 userPreferencesRepository.navBarCornerRadiusFlow,
                 userPreferencesRepository.navBarStyleFlow,
                 userPreferencesRepository.libraryNavigationModeFlow,
                 userPreferencesRepository.carouselStyleFlow,
-                userPreferencesRepository.launchTabFlow
+                userPreferencesRepository.launchTabFlow,
+                userPreferencesRepository.showPlayerFileInfoFlow
             ) { values ->
                 SettingsUiUpdate.Group1(
                     appRebrandDialogShown = values[0] as Boolean,
                     appThemeMode = values[1] as String,
                     playerThemePreference = values[2] as String,
-                    mockGenresEnabled = values[3] as Boolean,
-                    navBarCornerRadius = values[4] as Int,
-                    navBarStyle = values[5] as String,
-                    libraryNavigationMode = values[6] as String,
-                    carouselStyle = values[7] as String,
-                    launchTab = values[8] as String
+                    albumArtPaletteStyle = values[3] as AlbumArtPaletteStyle,
+                    mockGenresEnabled = values[4] as Boolean,
+                    navBarCornerRadius = values[5] as Int,
+                    navBarStyle = values[6] as String,
+                    libraryNavigationMode = values[7] as String,
+                    carouselStyle = values[8] as String,
+                    launchTab = values[9] as String,
+                    showPlayerFileInfo = values[10] as Boolean
                 )
             }.collect { update ->
                 _uiState.update { state ->
@@ -182,12 +237,14 @@ class SettingsViewModel @Inject constructor(
                         appRebrandDialogShown = update.appRebrandDialogShown,
                         appThemeMode = update.appThemeMode,
                         playerThemePreference = update.playerThemePreference,
+                        albumArtPaletteStyle = update.albumArtPaletteStyle,
                         mockGenresEnabled = update.mockGenresEnabled,
                         navBarCornerRadius = update.navBarCornerRadius,
                         navBarStyle = update.navBarStyle,
                         libraryNavigationMode = update.libraryNavigationMode,
                         carouselStyle = update.carouselStyle,
-                        launchTab = update.launchTab
+                        launchTab = update.launchTab,
+                        showPlayerFileInfo = update.showPlayerFileInfo
                     )
                 }
             }
@@ -202,9 +259,13 @@ class SettingsViewModel @Inject constructor(
                 userPreferencesRepository.isCrossfadeEnabledFlow,
                 userPreferencesRepository.crossfadeDurationFlow,
                 userPreferencesRepository.persistentShuffleEnabledFlow,
+                userPreferencesRepository.folderBackGestureNavigationFlow,
                 userPreferencesRepository.lyricsSourcePreferenceFlow,
                 userPreferencesRepository.autoScanLrcFilesFlow,
-                userPreferencesRepository.blockedDirectoriesFlow
+                userPreferencesRepository.blockedDirectoriesFlow,
+                userPreferencesRepository.hapticsEnabledFlow,
+                userPreferencesRepository.immersiveLyricsEnabledFlow,
+                userPreferencesRepository.immersiveLyricsTimeoutFlow
             ) { values ->
                 SettingsUiUpdate.Group2(
                     keepPlayingInBackground = values[0] as Boolean,
@@ -213,9 +274,13 @@ class SettingsViewModel @Inject constructor(
                     isCrossfadeEnabled = values[3] as Boolean,
                     crossfadeDuration = values[4] as Int,
                     persistentShuffleEnabled = values[5] as Boolean,
-                    lyricsSourcePreference = values[6] as LyricsSourcePreference,
-                    autoScanLrcFiles = values[7] as Boolean,
-                    blockedDirectories = @Suppress("UNCHECKED_CAST") (values[8] as Set<String>)
+                    folderBackGestureNavigation = values[6] as Boolean,
+                    lyricsSourcePreference = values[7] as LyricsSourcePreference,
+                    autoScanLrcFiles = values[8] as Boolean,
+                    blockedDirectories = @Suppress("UNCHECKED_CAST") (values[9] as Set<String>),
+                    hapticsEnabled = values[10] as Boolean,
+                    immersiveLyricsEnabled = values[11] as Boolean,
+                    immersiveLyricsTimeout = values[12] as Long
                 )
             }.collect { update ->
                 _uiState.update { state ->
@@ -226,9 +291,13 @@ class SettingsViewModel @Inject constructor(
                         isCrossfadeEnabled = update.isCrossfadeEnabled,
                         crossfadeDuration = update.crossfadeDuration,
                         persistentShuffleEnabled = update.persistentShuffleEnabled,
+                        folderBackGestureNavigation = update.folderBackGestureNavigation,
                         lyricsSourcePreference = update.lyricsSourcePreference,
                         autoScanLrcFiles = update.autoScanLrcFiles,
-                        blockedDirectories = update.blockedDirectories
+                        blockedDirectories = update.blockedDirectories,
+                        hapticsEnabled = update.hapticsEnabled,
+                        immersiveLyricsEnabled = update.immersiveLyricsEnabled,
+                        immersiveLyricsTimeout = update.immersiveLyricsTimeout
                     )
                 }
             }
@@ -242,8 +311,33 @@ class SettingsViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            userPreferencesRepository.usePlayerSheetV2Flow.collect { enabled ->
+                _uiState.update { it.copy(usePlayerSheetV2 = enabled) }
+            }
+        }
+
+        viewModelScope.launch {
+            userPreferencesRepository.backupInfoDismissedFlow.collect { dismissed ->
+                _uiState.update { it.copy(backupInfoDismissed = dismissed) }
+            }
+        }
+
+        viewModelScope.launch {
             fileExplorerStateHolder.isLoading.collect { loading ->
                 _uiState.update { it.copy(isLoadingDirectories = loading) }
+            }
+        }
+
+        // Beta Features Collectors
+        viewModelScope.launch {
+            userPreferencesRepository.albumArtQualityFlow.collect { quality ->
+                _uiState.update { it.copy(albumArtQuality = quality) }
+            }
+        }
+
+        viewModelScope.launch {
+            userPreferencesRepository.tapBackgroundClosesPlayerFlow.collect { enabled ->
+                _uiState.update { it.copy(tapBackgroundClosesPlayer = enabled) }
             }
         }
     }
@@ -255,8 +349,19 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun toggleDirectoryAllowed(file: File) {
-        fileExplorerStateHolder.toggleDirectoryAllowed(file)
-        syncManager.sync()
+        hasPendingDirectoryRuleChanges = true
+        latestDirectoryRuleUpdateJob = viewModelScope.launch {
+            fileExplorerStateHolder.toggleDirectoryAllowed(file)
+        }
+    }
+
+    fun applyPendingDirectoryRuleChanges() {
+        if (!hasPendingDirectoryRuleChanges) return
+        hasPendingDirectoryRuleChanges = false
+        viewModelScope.launch {
+            latestDirectoryRuleUpdateJob?.join()
+            syncManager.forceRefresh()
+        }
     }
 
     fun loadDirectory(file: File) {
@@ -294,6 +399,12 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setAlbumArtPaletteStyle(style: AlbumArtPaletteStyle) {
+        viewModelScope.launch {
+            userPreferencesRepository.setAlbumArtPaletteStyle(style)
+        }
+    }
+
     fun setAppThemeMode(mode: String) {
         viewModelScope.launch {
             userPreferencesRepository.setAppThemeMode(mode)
@@ -315,6 +426,12 @@ class SettingsViewModel @Inject constructor(
     fun setCarouselStyle(style: String) {
         viewModelScope.launch {
             userPreferencesRepository.setCarouselStyle(style)
+        }
+    }
+
+    fun setShowPlayerFileInfo(show: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setShowPlayerFileInfo(show)
         }
     }
 
@@ -357,6 +474,12 @@ class SettingsViewModel @Inject constructor(
     fun setPersistentShuffleEnabled(enabled: Boolean) {
         viewModelScope.launch {
             userPreferencesRepository.setPersistentShuffleEnabled(enabled)
+        }
+    }
+
+    fun setFolderBackGestureNavigation(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setFolderBackGestureNavigation(enabled)
         }
     }
 
@@ -417,9 +540,27 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun setFullPlayerPlaceholdersOnClose(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setFullPlayerPlaceholdersOnClose(enabled)
+        }
+    }
+
     fun setFullPlayerAppearThreshold(thresholdPercent: Int) {
         viewModelScope.launch {
             userPreferencesRepository.setFullPlayerAppearThreshold(thresholdPercent)
+        }
+    }
+
+    fun setFullPlayerCloseThreshold(thresholdPercent: Int) {
+        viewModelScope.launch {
+            userPreferencesRepository.setFullPlayerCloseThreshold(thresholdPercent)
+        }
+    }
+
+    fun setUsePlayerSheetV2(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setUsePlayerSheetV2(enabled)
         }
     }
 
@@ -440,6 +581,18 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             if (isSyncing.value) return@launch
             syncManager.fullSync()
+        }
+    }
+
+    fun setImmersiveLyricsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setImmersiveLyricsEnabled(enabled)
+        }
+    }
+
+    fun setImmersiveLyricsTimeout(timeout: Long) {
+        viewModelScope.launch {
+            userPreferencesRepository.setImmersiveLyricsTimeout(timeout)
         }
     }
 
@@ -543,6 +696,141 @@ class SettingsViewModel @Inject constructor(
     fun resetSetupFlow() {
         viewModelScope.launch {
             userPreferencesRepository.setInitialSetupDone(false)
+        }
+    }
+
+    // ===== Developer Options =====
+
+    val albumArtQuality: StateFlow<AlbumArtQuality> = userPreferencesRepository.albumArtQualityFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AlbumArtQuality.MEDIUM)
+
+    val useSmoothCorners: StateFlow<Boolean> = userPreferencesRepository.useSmoothCornersFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    val tapBackgroundClosesPlayer: StateFlow<Boolean> = userPreferencesRepository.tapBackgroundClosesPlayerFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    fun setAlbumArtQuality(quality: AlbumArtQuality) {
+        viewModelScope.launch {
+            userPreferencesRepository.setAlbumArtQuality(quality)
+        }
+    }
+
+    fun setUseSmoothCorners(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setUseSmoothCorners(enabled)
+        }
+    }
+
+    fun setTapBackgroundClosesPlayer(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setTapBackgroundClosesPlayer(enabled)
+        }
+    }
+
+    fun setHapticsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setHapticsEnabled(enabled)
+        }
+    }
+
+    fun setBackupInfoDismissed(dismissed: Boolean) {
+        viewModelScope.launch {
+            userPreferencesRepository.setBackupInfoDismissed(dismissed)
+        }
+    }
+
+    fun exportAppData(uri: Uri, sections: Set<BackupSection>) {
+        if (sections.isEmpty() || _uiState.value.isDataTransferInProgress) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDataTransferInProgress = true) }
+            _dataTransferProgress.value = BackupTransferProgressUpdate(
+                operation = BackupOperationType.EXPORT,
+                step = 0,
+                totalSteps = 1,
+                title = "Preparing backup",
+                detail = "Starting backup task."
+            )
+            val result = backupManager.export(uri, sections) { progress ->
+                _dataTransferProgress.value = progress
+            }
+            result.fold(
+                onSuccess = { _dataTransferEvents.emit("Data exported successfully") },
+                onFailure = { _dataTransferEvents.emit("Export failed: ${it.localizedMessage ?: "Unknown error"}") }
+            )
+            delay(300)
+            _uiState.update { it.copy(isDataTransferInProgress = false) }
+            _dataTransferProgress.value = null
+        }
+    }
+
+    fun inspectBackupFile(uri: Uri) {
+        if (_uiState.value.isInspectingBackup) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isInspectingBackup = true, backupValidationErrors = emptyList(), restorePlan = null) }
+            val result = backupManager.inspectBackup(uri)
+            result.fold(
+                onSuccess = { plan ->
+                    _uiState.update { it.copy(restorePlan = plan, isInspectingBackup = false) }
+                },
+                onFailure = { error ->
+                    _dataTransferEvents.emit("Invalid backup: ${error.localizedMessage ?: "Unknown error"}")
+                    _uiState.update { it.copy(isInspectingBackup = false) }
+                }
+            )
+        }
+    }
+
+    fun updateRestorePlanSelection(selectedModules: Set<BackupSection>) {
+        _uiState.update { state ->
+            state.restorePlan?.let { plan ->
+                state.copy(restorePlan = plan.copy(selectedModules = selectedModules))
+            } ?: state
+        }
+    }
+
+    fun restoreFromPlan(uri: Uri) {
+        val plan = _uiState.value.restorePlan ?: return
+        if (plan.selectedModules.isEmpty() || _uiState.value.isDataTransferInProgress) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isDataTransferInProgress = true) }
+            _dataTransferProgress.value = BackupTransferProgressUpdate(
+                operation = BackupOperationType.IMPORT,
+                step = 0,
+                totalSteps = 1,
+                title = "Preparing restore",
+                detail = "Starting restore task."
+            )
+            val result = backupManager.restore(uri, plan) { progress ->
+                _dataTransferProgress.value = progress
+            }
+            when (result) {
+                is RestoreResult.Success -> {
+                    _dataTransferEvents.emit("Data restored successfully")
+                    syncManager.sync()
+                }
+                is RestoreResult.PartialFailure -> {
+                    val failedNames = result.failed.entries.joinToString { "${it.key.label}: ${it.value}" }
+                    _dataTransferEvents.emit("Partial restore. Failed: $failedNames")
+                    if (result.succeeded.isNotEmpty()) syncManager.sync()
+                }
+                is RestoreResult.TotalFailure -> {
+                    _dataTransferEvents.emit("Restore failed: ${result.error}")
+                }
+            }
+            delay(300)
+            _uiState.update { it.copy(isDataTransferInProgress = false, restorePlan = null) }
+            _dataTransferProgress.value = null
+        }
+    }
+
+    fun clearRestorePlan() {
+        _uiState.update { it.copy(restorePlan = null, backupValidationErrors = emptyList()) }
+    }
+
+    fun removeBackupHistoryEntry(entry: BackupHistoryEntry) {
+        viewModelScope.launch {
+            backupManager.removeBackupHistoryEntry(entry.uri)
         }
     }
 }

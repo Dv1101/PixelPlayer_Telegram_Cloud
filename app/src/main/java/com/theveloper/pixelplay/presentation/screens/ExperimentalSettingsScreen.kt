@@ -198,9 +198,24 @@ fun ExperimentalSettingsScreen(
                         ) {
                             val delayAllEnabled = uiState.fullPlayerLoadingTweaks.delayAll
                             val appearThresholdPercent = uiState.fullPlayerLoadingTweaks.contentAppearThresholdPercent
+                            val closeThresholdPercent = uiState.fullPlayerLoadingTweaks.contentCloseThresholdPercent
                             val isAnyDelayEnabled = uiState.fullPlayerLoadingTweaks.let {
                                 it.delayAll || it.delayAlbumCarousel || it.delaySongMetadata || it.delayProgressBar || it.delayControls
                             }
+
+                            SwitchSettingItem(
+                                title = "Use Player Sheet V2",
+                                subtitle = "Routes player UI through the new rewrite host. Keep disabled if you notice regressions.",
+                                checked = uiState.usePlayerSheetV2,
+                                onCheckedChange = settingsViewModel::setUsePlayerSheetV2,
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.ViewCarousel,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
+                            )
 
                             SwitchSettingItem(
                                 title = "Delay everything",
@@ -300,12 +315,12 @@ fun ExperimentalSettingsScreen(
 
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = "Full player content appear threshold",
+                                                text = "Expand threshold",
                                                 style = MaterialTheme.typography.titleMedium,
                                                 color = MaterialTheme.colorScheme.onSurface
                                             )
                                             Text(
-                                                text = "Control when delayed full player components become visible during expansion.",
+                                                text = "Choose how expanded the sheet must be before delayed components become visible.",
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -315,8 +330,8 @@ fun ExperimentalSettingsScreen(
                                     Slider(
                                         value = appearThresholdPercent.toFloat(),
                                         onValueChange = { settingsViewModel.setFullPlayerAppearThreshold(it.roundToInt()) },
-                                        valueRange = 50f..100f,
-                                        steps = 50,
+                                        valueRange = 0f..100f,
+                                        steps = 99,
                                         enabled = isAnyDelayEnabled
                                     )
 
@@ -328,11 +343,78 @@ fun ExperimentalSettingsScreen(
                                 }
                             }
 
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.LinearScale,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.secondary
+                                        )
+
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "Close threshold",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = "Choose how much the sheet must collapse before placeholders take over while closing.",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+
+                                    Slider(
+                                        value = closeThresholdPercent.toFloat(),
+                                        onValueChange = { settingsViewModel.setFullPlayerCloseThreshold(it.roundToInt()) },
+                                        valueRange = 0f..100f,
+                                        steps = 99,
+                                        enabled = isAnyDelayEnabled && uiState.fullPlayerLoadingTweaks.applyPlaceholdersOnClose
+                                    )
+
+                                    Text(
+                                        text = "Placeholders appear after ${closeThresholdPercent}% collapse",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+
                             SwitchSettingItem(
                                 title = "Use placeholders for delayed items",
                                 subtitle = "Keep layout stable by rendering lightweight placeholders while components wait for expansion.",
                                 checked = uiState.fullPlayerLoadingTweaks.showPlaceholders,
                                 onCheckedChange = settingsViewModel::setFullPlayerPlaceholders,
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Rectangle,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
+                            )
+
+                            SwitchSettingItem(
+                                title = "Also apply on player close",
+                                subtitle = "Show delayed placeholders immediately when the player starts collapsing.",
+                                checked = uiState.fullPlayerLoadingTweaks.applyPlaceholdersOnClose,
+                                onCheckedChange = settingsViewModel::setFullPlayerPlaceholdersOnClose,
+                                enabled = uiState.fullPlayerLoadingTweaks.showPlaceholders,
                                 leadingIcon = {
                                     Icon(
                                         imageVector = Icons.Rounded.Rectangle,
@@ -356,6 +438,102 @@ fun ExperimentalSettingsScreen(
                                     )
                                 }
                             )
+                        }
+                    }
+                }
+            }
+            
+            // Divider for new section
+            item(key = "divider_visuals") { 
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                ) {
+                     Text(
+                        text = "Visual Quality",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                     androidx.compose.material3.HorizontalDivider(
+                        modifier = Modifier
+                            .weight(3f)
+                            .padding(start = 8.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
+                }
+            }
+
+            item(key = "visual_tweaks_section") {
+                val albumArtQuality = uiState.albumArtQuality
+                
+                 SettingsSection(
+                    title = "Album Art Resolution",
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Rounded.MusicNote, // Or Image/Photo icon
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(24.dp),
+                        color = Color.Transparent,
+                        modifier = Modifier.padding(horizontal = 0.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                           // Quality Selector using a Dialog or a custom Picker?
+                           // Using a series of Radio Buttons or a clickable list item that opens a dialog is common.
+                           // For simplicity and quick access as requested ("selector or slider"), let's use a segmented style or a simple list of options.
+                           
+                           // Using a loop to create selectable items for each enum value
+                           com.theveloper.pixelplay.data.preferences.AlbumArtQuality.entries.forEach { quality ->
+                               val isSelected = quality == albumArtQuality
+                               
+                               Surface(
+                                   color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                   shape = RoundedCornerShape(12.dp),
+                                   modifier = Modifier.fillMaxWidth(),
+                                   onClick = { settingsViewModel.setAlbumArtQuality(quality) }
+                               ) {
+                                   Row(
+                                       modifier = Modifier
+                                           .padding(horizontal = 16.dp, vertical = 12.dp)
+                                           .fillMaxWidth(),
+                                       verticalAlignment = Alignment.CenterVertically,
+                                       horizontalArrangement = Arrangement.SpaceBetween
+                                   ) {
+                                       Column(modifier = Modifier.weight(1f)) {
+                                           Text(
+                                               text = quality.label.substringBefore(" - "),
+                                               style = MaterialTheme.typography.bodyLarge,
+                                               color = MaterialTheme.colorScheme.onSurface,
+                                               fontWeight = if (isSelected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Normal
+                                           )
+                                           quality.label.substringAfter(" - ", "").takeIf { it.isNotEmpty() }?.let { desc ->
+                                                Text(
+                                                   text = desc,
+                                                   style = MaterialTheme.typography.bodySmall,
+                                                   color = MaterialTheme.colorScheme.onSurfaceVariant
+                                               )
+                                           }
+                                       }
+                                       
+                                       if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.LinearScale, // Check icon
+                                                contentDescription = "Selected",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                       }
+                                   }
+                               }
+                           }
                         }
                     }
                 }

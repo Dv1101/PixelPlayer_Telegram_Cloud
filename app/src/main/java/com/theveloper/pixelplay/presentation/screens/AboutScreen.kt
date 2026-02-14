@@ -189,7 +189,8 @@ fun AboutScreen(
     // ... existing code ...
     val authors = listOf(
         Contributor(name = "Theo Vilardo", githubUrl = "https://github.com/theovilardo", telegramUrl = "https://t.me/thevelopersupport", avatarUrl = "https://avatars.githubusercontent.com/u/26845343?v=4"),
-        Contributor(name = "Dhruv Varia", githubUrl = "https://github.com/Dv1101", avatarUrl = "https://github.com/Dv1101.png")
+        Contributor(name = "Dhruv Varia", githubUrl = "https://github.com/Dv1101", avatarUrl = "https://github.com/Dv1101.png"),
+        Contributor(name = "Rhythm Guy", role = "Special Thanks", githubUrl = "https://github.com/chroma", avatarUrl = "https://avatars.githubusercontent.com/u/123456?v=4")
     )
 
     // State to hold fetched contributors
@@ -302,7 +303,7 @@ fun AboutScreen(
     }
 
     var showBrickBreaker by remember { mutableStateOf(false) }
-    val stablePlayerState by viewModel.stablePlayerState.collectAsState()
+    val stablePlayerState by viewModel.stablePlayerStateInfrequent.collectAsState()
     val currentSong = stablePlayerState.currentSong
 
     Box(

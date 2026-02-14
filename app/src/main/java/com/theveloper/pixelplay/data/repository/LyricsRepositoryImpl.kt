@@ -23,6 +23,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,12 +57,23 @@ private data class LyricsData(
     fun hasLyrics(): Boolean = !plainLyrics.isNullOrBlank() || !syncedLyrics.isNullOrBlank()
 }
 
+private data class RemoteSearchStrategy(
+    val name: String,
+    val request: suspend () -> Array<LrcLibResponse>?
+)
+
+private data class RemoteSearchBatch(
+    val strategyName: String,
+    val responses: List<LrcLibResponse>
+)
+
 @Singleton
 class LyricsRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val lrcLibApiService: LrcLibApiService,
-    private val musicDao: MusicDao
+    private val lyricsDao: com.theveloper.pixelplay.data.database.LyricsDao
 ) : LyricsRepository {
+
 
     companion object {
         private const val TAG = "LyricsRepository"
@@ -84,12 +96,55 @@ class LyricsRepositoryImpl @Inject constructor(
         }
     }
 
-    // Rate limiting state (matching Rhythm)
-    private val lastApiCalls = mutableMapOf<String, Long>()
-    private val apiCallCounts = mutableMapOf<String, Int>()
+    // Rate limiting state (bounded to prevent unbounded growth)
+    private val lastApiCalls = object : LinkedHashMap<String, Long>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean = size > 200
+    }
+    private val apiCallCounts = object : LinkedHashMap<String, Int>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Int>?): Boolean = size > 200
+    }
 
     // Gson for JSON cache
     private val gson = Gson()
+
+    /**
+     * Executes multiple remote search strategies in parallel and returns the first non-empty result set.
+     * This keeps search responsive while preserving the existing "first useful strategy wins" behavior.
+     */
+    private suspend fun runSearchStrategiesFast(
+        strategies: List<RemoteSearchStrategy>
+    ): List<LrcLibResponse> = coroutineScope {
+        if (strategies.isEmpty()) return@coroutineScope emptyList()
+
+        val channel = Channel<RemoteSearchBatch>(capacity = strategies.size)
+        val jobs = strategies.map { strategy ->
+            launch {
+                val responses = runCatching { strategy.request() }
+                    .getOrNull()
+                    ?.toList()
+                    .orEmpty()
+                channel.trySend(
+                    RemoteSearchBatch(
+                        strategyName = strategy.name,
+                        responses = responses
+                    )
+                )
+            }
+        }
+
+        repeat(strategies.size) {
+            val batch = channel.receive()
+            if (batch.responses.isNotEmpty()) {
+                Log.d(TAG, "Fast search hit from strategy: ${batch.strategyName} (${batch.responses.size} results)")
+                jobs.forEach { it.cancel() }
+                channel.close()
+                return@coroutineScope batch.responses.distinctBy { it.id }
+            }
+        }
+
+        channel.close()
+        emptyList()
+    }
 
     /**
      * Calculate delay needed before next API call (matching Rhythm)
@@ -250,45 +305,52 @@ class LyricsRepositoryImpl @Inject constructor(
         try {
             val cleanArtist = song.displayArtist.trim().replace(Regex("\\(.*?\\)"), "").trim()
             val cleanTitle = song.title.trim().replace(Regex("\\(.*?\\)"), "").trim()
+            val simplifiedArtist = cleanArtist.split(" feat.", " ft.", " featuring").first().trim()
+            val simplifiedTitle = cleanTitle.split(" feat.", " ft.", " featuring").first().trim()
+            val useSimplifiedStrategy =
+                simplifiedArtist != cleanArtist || simplifiedTitle != cleanTitle
 
-            // Strategy 1: Search by track name and artist name (matching Rhythm)
-            var results = runCatching {
-                lrcLibApiService.searchLyrics(trackName = cleanTitle, artistName = cleanArtist)
-            }.getOrNull()
-
-            // Strategy 2: Combined query (matching Rhythm)
-            if (results.isNullOrEmpty()) {
-                val query = "$cleanArtist $cleanTitle"
-                results = runCatching {
-                    lrcLibApiService.searchLyrics(query = query)
-                }.getOrNull()
+            val searchStrategies = buildList {
+                add(
+                    RemoteSearchStrategy("track+artist") {
+                        lrcLibApiService.searchLyrics(trackName = cleanTitle, artistName = cleanArtist)
+                    }
+                )
+                add(
+                    RemoteSearchStrategy("combined_query") {
+                        lrcLibApiService.searchLyrics(query = "$cleanArtist $cleanTitle")
+                    }
+                )
+                if (useSimplifiedStrategy) {
+                    add(
+                        RemoteSearchStrategy("simplified_track+artist") {
+                            lrcLibApiService.searchLyrics(trackName = simplifiedTitle, artistName = simplifiedArtist)
+                        }
+                    )
+                }
             }
 
-            // Strategy 3: Simplified names without feat. etc (matching Rhythm)
-            if (results.isNullOrEmpty()) {
-                val simplifiedArtist = cleanArtist.split(" feat.", " ft.", " featuring").first().trim()
-                val simplifiedTitle = cleanTitle.split(" feat.", " ft.", " featuring").first().trim()
-                results = runCatching {
-                    lrcLibApiService.searchLyrics(trackName = simplifiedTitle, artistName = simplifiedArtist)
-                }.getOrNull()
-            }
+            var results = runSearchStrategiesFast(searchStrategies)
 
             // Strategy 4: Aggressive fallback - remove artist and trim title at separators (-, ,, (, ), $, #, :, %)
-            if (results.isNullOrEmpty()) {
+            if (results.isEmpty()) {
                  val separators = charArrayOf('-', ',', '(', ')', '$', '#', ':', '%')
                  val index = cleanTitle.indexOfAny(separators)
                  if (index != -1) {
                      val superCleanTitle = cleanTitle.substring(0, index).trim()
                      if (superCleanTitle.isNotEmpty()) {
                           Log.d(TAG, "Strategy 4: Searching with super simplified title: '$superCleanTitle' (no artist)")
-                          results = runCatching {
+                          val fallbackResults = runCatching {
                                 lrcLibApiService.searchLyrics(trackName = superCleanTitle)
                           }.getOrNull()
+                          if (!fallbackResults.isNullOrEmpty()) {
+                              results = fallbackResults.toList()
+                          }
                      }
                  }
             }
 
-            if (results.isNullOrEmpty()) {
+            if (results.isEmpty()) {
                 Log.d(TAG, "No results from LRCLIB API")
                 return@withContext null
             }
@@ -313,10 +375,16 @@ class LyricsRepositoryImpl @Inject constructor(
                     if (parsedLyrics.isValid()) {
                         Log.d(TAG, "LRCLIB lyrics found - Synced: ${!bestMatch.syncedLyrics.isNullOrBlank()}, Plain: ${!bestMatch.plainLyrics.isNullOrBlank()}")
                         
-                        // Save to database (only if ID is numeric/local)
+                        // Save to database
                         try {
-                            val songIdLong = song.id.toLong()
-                            musicDao.updateLyrics(songIdLong, rawLyrics)
+                            lyricsDao.insert(
+                                com.theveloper.pixelplay.data.database.LyricsEntity(
+                                    songId = song.id.toLong(),
+                                    content = rawLyrics,
+                                    isSynced = !bestMatch.syncedLyrics.isNullOrBlank(),
+                                    source = "remote"
+                                )
+                            )
                         } catch (e: NumberFormatException) {
                             Log.w(TAG, "Skipping database save for non-numeric song ID: ${song.id} (likely Telegram song). Lyrics will be cached in JSON.")
                         }
@@ -450,10 +518,12 @@ class LyricsRepositoryImpl @Inject constructor(
      * Load embedded lyrics from audio file metadata
      */
     private suspend fun loadLyricsFromStorage(song: Song): Lyrics? = withContext(Dispatchers.IO) {
-        // First check database for user-imported lyrics
-        if (!song.lyrics.isNullOrBlank()) {
-            val parsedLyrics = LyricsUtils.parseLyrics(song.lyrics)
+        // First check database for persisted lyrics (was user-imported or cached)
+        val persisted = lyricsDao.getLyrics(song.id.toLong())
+        if (persisted != null && !persisted.content.isBlank()) {
+            val parsedLyrics = LyricsUtils.parseLyrics(persisted.content)
             if (parsedLyrics.isValid()) {
+                // If we found it in DB, we treat it as "embedded" or "locally cached" for this flow
                 return@withContext parsedLyrics.copy(areFromRemote = false)
             }
         }
@@ -475,7 +545,9 @@ class LyricsRepositoryImpl @Inject constructor(
             try {
                 ParcelFileDescriptor.open(tempFile, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
                     val metadata = TagLib.getMetadata(fd.detachFd())
-                    val lyricsField = metadata?.propertyMap?.get("LYRICS")?.firstOrNull()
+                    val propertyMap = metadata?.propertyMap
+                    val lyricsField = propertyMap?.get("LYRICS")?.firstOrNull()
+                        ?: propertyMap?.get("UNSYNCEDLYRICS")?.firstOrNull()
 
                     if (!lyricsField.isNullOrBlank()) {
                         val parsedLyrics = LyricsUtils.parseLyrics(lyricsField)
@@ -514,7 +586,14 @@ class LyricsRepositoryImpl @Inject constructor(
                     val rawLyricsToSave = best.rawLyrics
 
                     try {
-                        musicDao.updateLyrics(song.id.toLong(), rawLyricsToSave)
+                        lyricsDao.insert(
+                             com.theveloper.pixelplay.data.database.LyricsEntity(
+                                 songId = song.id.toLong(),
+                                 content = rawLyricsToSave,
+                                 isSynced = !best.lyrics.synced.isNullOrEmpty(),
+                                 source = "remote"
+                             )
+                        )
                     } catch (e: NumberFormatException) {
                         Log.w(TAG, "Skipping DB update for non-numeric ID: ${song.id}")
                     }
@@ -546,7 +625,14 @@ class LyricsRepositoryImpl @Inject constructor(
                 }
 
                 try {
-                    musicDao.updateLyrics(song.id.toLong(), rawLyricsToSave)
+                    lyricsDao.insert(
+                         com.theveloper.pixelplay.data.database.LyricsEntity(
+                             songId = song.id.toLong(),
+                             content = rawLyricsToSave,
+                             isSynced = !parsedLyrics.synced.isNullOrEmpty(),
+                             source = "remote"
+                         )
+                    )
                 } catch (e: NumberFormatException) {
                     Log.w(TAG, "Skipping DB update for non-numeric ID in fallback: ${song.id}")
                 }
@@ -580,28 +666,26 @@ class LyricsRepositoryImpl @Inject constructor(
             LogUtils.d(this@LyricsRepositoryImpl, "Searching remote for lyrics for: ${song.title} by ${song.displayArtist}")
 
             val combinedQuery = "${song.title} ${song.displayArtist}"
+            val cleanTitle = song.title.trim()
+            val cleanArtist = song.displayArtist.trim()
 
-            // SEQUENTIAL STRATEGY: Try each search strategy one by one
-            val strategies: List<suspend () -> Array<LrcLibResponse>?> = listOf(
-                { runCatching { lrcLibApiService.searchLyrics(query = combinedQuery, artistName = song.displayArtist) }.getOrNull() },
-                { runCatching { lrcLibApiService.searchLyrics(trackName = song.title, artistName = song.displayArtist) }.getOrNull() },
-                { runCatching { lrcLibApiService.searchLyrics(trackName = song.title) }.getOrNull() },
-                { runCatching { lrcLibApiService.searchLyrics(query = song.title) }.getOrNull() }
+            // FAST STRATEGY: run all requests in parallel, keep first non-empty batch
+            val strategies = listOf(
+                RemoteSearchStrategy("query+artist") {
+                    lrcLibApiService.searchLyrics(query = combinedQuery, artistName = cleanArtist)
+                },
+                RemoteSearchStrategy("track+artist") {
+                    lrcLibApiService.searchLyrics(trackName = cleanTitle, artistName = cleanArtist)
+                },
+                RemoteSearchStrategy("track_only") {
+                    lrcLibApiService.searchLyrics(trackName = cleanTitle)
+                },
+                RemoteSearchStrategy("query_title_only") {
+                    lrcLibApiService.searchLyrics(query = cleanTitle)
+                }
             )
 
-            var allResults: List<LrcLibResponse> = emptyList()
-            for ((index, strategy) in strategies.withIndex()) {
-                LogUtils.d(this@LyricsRepositoryImpl, "Trying search strategy ${index + 1}/4...")
-                val result = strategy()
-                if (!result.isNullOrEmpty()) {
-                    LogUtils.d(this@LyricsRepositoryImpl, "Strategy ${index + 1} returned ${result.size} results")
-                    allResults = result.toList()
-                    break
-                }
-                LogUtils.d(this@LyricsRepositoryImpl, "Strategy ${index + 1} returned no results, trying next...")
-            }
-
-            val uniqueResults = allResults.distinctBy { it.id }
+            val uniqueResults = runSearchStrategiesFast(strategies)
 
             if (uniqueResults.isNotEmpty()) {
                 val songDurationSeconds = song.duration / 1000
@@ -650,17 +734,28 @@ class LyricsRepositoryImpl @Inject constructor(
 
     override suspend fun searchRemoteByQuery(title: String, artist: String?): Result<Pair<String, List<LyricsSearchResult>>> = withContext(Dispatchers.IO) {
         try {
+            val cleanTitle = title.trim()
+            val cleanArtist = artist?.trim()?.takeIf { it.isNotBlank() }
             val query = listOfNotNull(
-                title.takeIf { it.isNotBlank() },
-                artist?.takeIf { it.isNotBlank() }
+                cleanTitle.takeIf { it.isNotBlank() },
+                cleanArtist
             ).joinToString(" ")
 
             LogUtils.d(this@LyricsRepositoryImpl, "Manual lyrics search: title=$title, artist=$artist")
 
-            // Search using the custom query provided by user
-            val responses = lrcLibApiService.searchLyrics(query = query)
-                ?.distinctBy { it.id }
-                ?: emptyList()
+            val strategies = buildList {
+                add(RemoteSearchStrategy("manual_query") { lrcLibApiService.searchLyrics(query = query) })
+                if (!cleanArtist.isNullOrBlank()) {
+                    add(
+                        RemoteSearchStrategy("manual_track+artist") {
+                            lrcLibApiService.searchLyrics(trackName = cleanTitle, artistName = cleanArtist)
+                        }
+                    )
+                }
+            }
+
+            // Run both in parallel and take the first non-empty result set.
+            val responses = runSearchStrategiesFast(strategies)
 
             if (responses.isEmpty()) {
                 return@withContext Result.failure(NoLyricsFoundException(query))
@@ -695,7 +790,14 @@ class LyricsRepositoryImpl @Inject constructor(
             return@withContext
         }
 
-        musicDao.updateLyrics(songId, lyricsContent)
+        lyricsDao.insert(
+             com.theveloper.pixelplay.data.database.LyricsEntity(
+                 songId = songId,
+                 content = lyricsContent,
+                 isSynced = parsedLyrics.synced?.isNotEmpty() == true,
+                 source = "manual"
+             )
+        )
 
         val cacheKey = generateCacheKey(songId.toString())
         synchronized(lyricsCache) {
@@ -711,9 +813,9 @@ class LyricsRepositoryImpl @Inject constructor(
             lyricsCache.remove(cacheKey)
         }
         try {
-            musicDao.resetLyrics(songId)
+            lyricsDao.deleteLyrics(songId)
         } catch (e: Exception) {
-            Log.w(TAG, "Error resetting DB lyrics for ID: $songId", e)
+            Log.w(TAG, "Error removing lyrics from DB for ID: $songId", e)
         }
         
         // Also remove JSON cache
@@ -730,7 +832,7 @@ class LyricsRepositoryImpl @Inject constructor(
         synchronized(lyricsCache) {
             lyricsCache.clear()
         }
-        musicDao.resetAllLyrics()
+        lyricsDao.deleteAll()
         
         // Also clear JSON cache directory
         try {
@@ -800,11 +902,18 @@ class LyricsRepositoryImpl @Inject constructor(
                                     // Verify validity
                                     if (LyricsUtils.parseLyrics(content).isValid()) {
                                         try {
-                                            musicDao.updateLyrics(song.id.toLong(), content)
+                                            lyricsDao.insert(
+                                                 com.theveloper.pixelplay.data.database.LyricsEntity(
+                                                     songId = song.id.toLong(),
+                                                     content = content,
+                                                     isSynced = LyricsUtils.parseLyrics(content).synced?.isNotEmpty() == true,
+                                                     source = "local_file"
+                                                 )
+                                            )
                                             updatedCount.incrementAndGet()
                                             LogUtils.d(this@LyricsRepositoryImpl, "Auto-assigned lyrics from ${foundFile.name}")
-                                        } catch (e: NumberFormatException) {
-                                            Log.w(TAG, "Skipping DB update for non-numeric ID in scanner: ${song.id}")
+                                        } catch (e: Exception) {
+                                            Log.w(TAG, "Skipping DB update for ID in scanner: ${song.id}", e)
                                         }
                                     }
                                 }

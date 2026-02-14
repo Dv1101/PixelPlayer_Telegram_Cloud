@@ -86,6 +86,8 @@ import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import com.theveloper.pixelplay.utils.getContrastColor
 import com.theveloper.pixelplay.utils.shapes.RoundedStarShape
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
+import com.theveloper.pixelplay.utils.resolvePlaylistCoverContentColor
+import kotlin.collections.set
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -217,6 +219,7 @@ fun PlaylistItems(
     filteredPlaylists: List<Playlist>,
     selectedPlaylists: SnapshotStateMap<String, Boolean>? = null
 ) {
+    val stablePlayerState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
     val listState = rememberLazyListState()
 
     androidx.compose.runtime.LaunchedEffect(filteredPlaylists) {
@@ -230,40 +233,55 @@ fun PlaylistItems(
         }
     }
 
-    LazyColumn(
-        modifier = Modifier
-            .padding(start = 12.dp, end = 12.dp, bottom = 6.dp)
-            .fillMaxSize()
-            .clip(
-                RoundedCornerShape(
-                    topStart = 26.dp,
-                    topEnd = 26.dp,
-                    bottomStart = PlayerSheetCollapsedCornerRadius,
-                    bottomEnd = PlayerSheetCollapsedCornerRadius
-                )
-            ),
-        state = listState,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + 30.dp)
-    ) {
-        items(filteredPlaylists, key = { it.id }) { playlist ->
-            val rememberedOnClick = remember(playlist.id) {
-                {
-                    if (isAddingToPlaylist && currentSong != null && selectedPlaylists != null) {
-                        val currentSelection = selectedPlaylists[playlist.id] ?: false
-                        selectedPlaylists[playlist.id] = !currentSelection
-                    } else
-                        navController?.navigate(Screen.PlaylistDetail.createRoute(playlist.id))
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier
+                .padding(start = 12.dp, end = if (listState.canScrollForward || listState.canScrollBackward) 22.dp else 12.dp, bottom = 6.dp)
+                .fillMaxSize()
+                .clip(
+                    RoundedCornerShape(
+                        topStart = 26.dp,
+                        topEnd = 26.dp,
+                        bottomStart = PlayerSheetCollapsedCornerRadius,
+                        bottomEnd = PlayerSheetCollapsedCornerRadius
+                    )
+                ),
+            state = listState,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + 30.dp)
+        ) {
+            items(filteredPlaylists, key = { it.id }) { playlist ->
+                val rememberedOnClick = remember(playlist.id) {
+                    {
+                        if (isAddingToPlaylist && currentSong != null && selectedPlaylists != null) {
+                            val currentSelection = selectedPlaylists[playlist.id] ?: false
+                            selectedPlaylists[playlist.id] = !currentSelection
+                        } else
+                            navController?.navigate(Screen.PlaylistDetail.createRoute(playlist.id))
+                    }
                 }
+                PlaylistItem(
+                    playlist = playlist,
+                    playerViewModel = playerViewModel,
+                    onClick = { rememberedOnClick() },
+                    isAddingToPlaylist = isAddingToPlaylist,
+                    selectedPlaylists = selectedPlaylists
+                )
             }
-            PlaylistItem(
-                playlist = playlist,
-                playerViewModel = playerViewModel,
-                onClick = { rememberedOnClick() },
-                isAddingToPlaylist = isAddingToPlaylist,
-                selectedPlaylists = selectedPlaylists
-            )
         }
+        
+        // ScrollBar Overlay
+        val bottomPadding = if (stablePlayerState.currentSong != null && stablePlayerState.currentSong != Song.emptySong()) 
+            bottomBarHeight + MiniPlayerHeight + 16.dp 
+        else 
+            bottomBarHeight + 16.dp
+
+        com.theveloper.pixelplay.presentation.components.ExpressiveScrollBar(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 4.dp, top = 16.dp, bottom = bottomPadding),
+            listState = listState
+        )
     }
 }
 
@@ -366,7 +384,10 @@ fun PlaylistItem(
                        Icon(
                             imageVector = getIconByName(playlist.coverIconName) ?: Icons.Filled.MusicNote,
                             contentDescription = null,
-                            tint = getContrastColor(Color(playlist.coverColorArgb)),
+                            tint = resolvePlaylistCoverContentColor(
+                                playlist.coverColorArgb,
+                                MaterialTheme.colorScheme
+                            ),
                             modifier = Modifier.size(24.dp).then(iconMod)
                        )
                    }

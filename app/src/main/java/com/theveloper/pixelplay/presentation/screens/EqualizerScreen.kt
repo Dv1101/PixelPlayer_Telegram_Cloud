@@ -115,11 +115,10 @@ import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.SurroundSound
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.material.icons.rounded.Check // Added import for Switch check icon
 import androidx.media3.common.util.UnstableApi
-import android.view.HapticFeedbackConstants // Check usage
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -143,6 +142,7 @@ import androidx.compose.material3.Surface
 import com.theveloper.pixelplay.presentation.components.CustomPresetsSheet
 import com.theveloper.pixelplay.presentation.components.ReorderPresetsSheet
 import com.theveloper.pixelplay.presentation.components.SavePresetDialog
+import com.theveloper.pixelplay.presentation.components.RenamePresetDialog
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository.EqualizerViewMode
 import androidx.compose.material.icons.rounded.ViewQuilt
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -150,6 +150,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material.icons.automirrored.rounded.ViewQuilt
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
+import androidx.compose.ui.platform.LocalView
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
@@ -167,6 +168,7 @@ fun EqualizerScreen(
     var showCustomPresetsSheet by remember { mutableStateOf(false) }
     var showReorderSheet by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<EqualizerPreset?>(null) }
     
     // Handlers
     if (showSaveDialog) {
@@ -176,12 +178,23 @@ fun EqualizerScreen(
         )
     }
     
+    renameTarget?.let { preset ->
+        RenamePresetDialog(
+            currentName = preset.displayName,
+            onDismiss = { renameTarget = null },
+            onRename = { newName ->
+                equalizerViewModel.renameCustomPreset(preset.name, newName)
+            }
+        )
+    }
+    
     if (showCustomPresetsSheet) {
         CustomPresetsSheet(
             presets = uiState.customPresets,
             pinnedPresetsNames = uiState.pinnedPresetsNames,
             onPresetSelected = { equalizerViewModel.selectPreset(it) },
             onPinToggled = { equalizerViewModel.togglePinPreset(it.name) },
+            onRename = { renameTarget = it },
             onDelete = { equalizerViewModel.deleteCustomPreset(it) },
             onDismiss = { showCustomPresetsSheet = false }
         )
@@ -316,13 +329,17 @@ fun EqualizerScreen(
                     bandLevels = uiState.bandLevels,
                     isEnabled = uiState.isEnabled,
                     currentPreset = uiState.currentPreset,
+                    editingPresetName = uiState.editingPresetName,
                     onBandLevelChanged = { bandId, level ->
                         equalizerViewModel.setBandLevel(bandId, level)
                     },
                     viewMode = uiState.viewMode,
                     onSaveClick = { showSaveDialog = true },
+                    onUpdateClick = {
+                        uiState.editingPresetName?.let { equalizerViewModel.updateCustomPresetBands(it) }
+                    },
                     onPresetsListClick = { showCustomPresetsSheet = true },
-                    onUnpinClick = { /* No-op or implement unpin from header */ }
+                    onUnpinClick = { }
                 )
             }
             
@@ -474,6 +491,7 @@ private fun PresetTabsRow(
     onPresetSelected: (EqualizerPreset) -> Unit,
     onEditClick: () -> Unit
 ) {
+    val showTabIndicator = false
     val selectedIndex = remember(presets, selectedPreset) {
         if (selectedPreset.isCustom || selectedPreset.name == "custom") {
              presets.indexOfLast { it.name == "Custom" || it.name == "custom" } // Match the placeholder
@@ -492,7 +510,7 @@ private fun PresetTabsRow(
         containerColor = Color.Transparent,
         divider = {},
         indicator = { tabPositions ->
-            if (selectedIndex < tabPositions.size) {
+            if (showTabIndicator && selectedIndex < tabPositions.size) {
                  TabRowDefaults.PrimaryIndicator(
                     modifier = Modifier.tabIndicatorOffset(tabPositions[selectedIndex]),
                     height = 3.dp,
@@ -563,11 +581,13 @@ private fun BandSlidersSection(
     bandLevels: List<Int>,
     isEnabled: Boolean,
     currentPreset: EqualizerPreset,
+    editingPresetName: String?,
     onBandLevelChanged: (Int, Int) -> Unit,
     viewMode: EqualizerViewMode,
-    onSaveClick: () -> Unit, // Added
-    onUnpinClick: () -> Unit, // Optional, but focus on Save first
-    onPresetsListClick: () -> Unit // To open Custom Presets sheet
+    onSaveClick: () -> Unit,
+    onUpdateClick: () -> Unit,
+    onUnpinClick: () -> Unit,
+    onPresetsListClick: () -> Unit
 ) {
     val frequencies = EqualizerPreset.BAND_FREQUENCIES
     
@@ -588,7 +608,8 @@ private fun BandSlidersSection(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                 val isCustomOrSaved = currentPreset.name == "custom" || currentPreset.isCustom
+                 val isCustomOrSaved = editingPresetName != null || currentPreset.name == "custom" || currentPreset.isCustom
+                 val displayLabel = editingPresetName ?: currentPreset.displayName
                  
                  Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -601,7 +622,7 @@ private fun BandSlidersSection(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = currentPreset.displayName,
+                            text = displayLabel,
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.onSecondaryContainer,
                             fontWeight = FontWeight.Bold
@@ -618,8 +639,7 @@ private fun BandSlidersSection(
                     }
                 }
                 
-                // Save Button (Side-by-side)
-                if (currentPreset.name == "custom") {
+                if (currentPreset.name == "custom" && editingPresetName == null) {
                      Surface(
                         color = MaterialTheme.colorScheme.tertiaryContainer,
                         shape = CircleShape,
@@ -643,6 +663,32 @@ private fun BandSlidersSection(
                              )
                          }
                      }
+                }
+                
+                if (editingPresetName != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                        shape = CircleShape,
+                        onClick = onUpdateClick
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Save,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Update",
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
             }
             
@@ -947,6 +993,7 @@ private fun CustomVerticalSlider(
 ) {
     val density = LocalDensity.current
     val hapticFeedback = LocalHapticFeedback.current
+    val view = LocalView.current
     val thumbSizePx = with(density) { thumbSize.toPx() }
     val thumbRadiusPx = thumbSizePx / 2
     
@@ -959,6 +1006,14 @@ private fun CustomVerticalSlider(
     
     // Track previous integer value for haptic feedback
     var lastHapticValue by remember { mutableIntStateOf(value.roundToInt()) }
+    var isInteracting by remember { mutableStateOf(false) }
+    var dragNormalizedValue by remember { mutableFloatStateOf(normalizedValue) }
+
+    LaunchedEffect(normalizedValue, isInteracting) {
+        if (!isInteracting) {
+            dragNormalizedValue = normalizedValue
+        }
+    }
     
     // Create the Path
     val starShape = remember { com.theveloper.pixelplay.utils.shapes.RoundedStarShape(sides = 8, curve = 0.1) }
@@ -978,8 +1033,8 @@ private fun CustomVerticalSlider(
     }
 
     // Colors for "inside" look
-    val actualActiveTrackColor = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-    val actualInactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+    val actualActiveTrackColor = if (enabled) activeTrackColor else activeTrackColor.copy(alpha = 0.3f)
+    val actualInactiveTrackColor = inactiveTrackColor
     val actualThumbColor = if (enabled) thumbColor else MaterialTheme.colorScheme.onSurfaceVariant
 
     androidx.compose.foundation.layout.BoxWithConstraints(
@@ -990,74 +1045,61 @@ private fun CustomVerticalSlider(
         
         // Usable track height (center of thumb travels within this range, respecting padding)
         val trackHeight = heightPx - thumbSizePx - (verticalPaddingPx * 2)
+        val safeTrackHeight = trackHeight.coerceAtLeast(1f)
+        val displayNormalizedValue = if (isInteracting) dragNormalizedValue else normalizedValue
         
         // thumb Y position (center)
-        val thumbCenterY = heightPx - verticalPaddingPx - thumbRadiusPx - (normalizedValue * trackHeight)
+        val thumbCenterY = heightPx - verticalPaddingPx - thumbRadiusPx - (displayNormalizedValue * safeTrackHeight)
         
         androidx.compose.foundation.Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 .clip(RoundedCornerShape(50))
-                .pointerInput(enabled) {
+                .pointerInput(enabled, valueRange.start, valueRange.endInclusive, safeTrackHeight, heightPx) {
                     if (!enabled) return@pointerInput
-                    detectVerticalDragGestures(
-                        onDragStart = { offset ->
-                            // Calculate initial touch relative to track bounds
-                            val touchY = offset.y.coerceIn(
-                                verticalPaddingPx + thumbRadiusPx, 
-                                heightPx - verticalPaddingPx - thumbRadiusPx
-                            )
-                            // Invert mapping: Y -> Normalized
-                            // y = height - vPad - radius - (norm * trackH)
-                            // norm * trackH = height - vPad - radius - y
-                            // norm = (height - vPad - radius - y) / trackH
-                            val trackTopY = verticalPaddingPx + thumbRadiusPx
-                            val trackBottomY = heightPx - verticalPaddingPx - thumbRadiusPx
-                            
-                            val relativeY = (offset.y - trackTopY).coerceIn(0f, trackHeight)
-                            // Drag goes down -> value goes down. 
-                            // 0 relativeY (top) -> max value (1.0)
-                            // trackHeight relativeY (bottom) -> min value (0.0)
-                            val newNormalized = 1f - (relativeY / trackHeight)
-                            
-                            val newValue = valueRange.start + newNormalized * (valueRange.endInclusive - valueRange.start)
-                            onValueChange(newValue)
-                            
-                            lastHapticValue = newValue.roundToInt()
+                    fun dispatchValue(touchY: Float, forceHaptic: Boolean = false) {
+                        val trackTopY = verticalPaddingPx + thumbRadiusPx
+                        val relativeY = (touchY - trackTopY).coerceIn(0f, safeTrackHeight)
+                        val newNormalized = 1f - (relativeY / safeTrackHeight)
+                        dragNormalizedValue = newNormalized
+                        val newValue = valueRange.start + newNormalized * (valueRange.endInclusive - valueRange.start)
+                        onValueChange(newValue)
+
+                        val newInt = newValue.roundToInt()
+                        if (forceHaptic || newInt != lastHapticValue) {
                             hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        },
-                        onVerticalDrag = { change, _ ->
-                            change.consume()
-                            val trackTopY = verticalPaddingPx + thumbRadiusPx
-                            
-                            val relativeY = (change.position.y - trackTopY).coerceIn(0f, trackHeight)
-                            val newNormalized = 1f - (relativeY / trackHeight)
-                            val newValue = valueRange.start + newNormalized * (valueRange.endInclusive - valueRange.start)
-                            onValueChange(newValue)
-                            
-                            // Enhanced Haptics: Trigger only when integer value changes
-                            val newInt = newValue.roundToInt()
-                            if (newInt != lastHapticValue) {
-                                hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                lastHapticValue = newInt
+                            lastHapticValue = newInt
+                        }
+                    }
+
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        view.parent?.requestDisallowInterceptTouchEvent(true)
+                        isInteracting = true
+                        down.consume()
+                        dispatchValue(down.position.y, forceHaptic = true)
+
+                        var activePointerId = down.id
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val pointerChange = event.changes.firstOrNull { it.id == activePointerId }
+                                ?: event.changes.firstOrNull { it.pressed }?.also { activePointerId = it.id }
+                                ?: break
+
+                            if (!pointerChange.pressed) {
+                                pointerChange.consume()
+                                break
+                            }
+
+                            if (pointerChange.position.y != pointerChange.previousPosition.y) {
+                                pointerChange.consume()
+                                dispatchValue(pointerChange.position.y)
                             }
                         }
-                    )
-                }
-                .pointerInput(enabled) {
-                    if (!enabled) return@pointerInput
-                    detectTapGestures(
-                        onTap = { offset ->
-                            val trackTopY = verticalPaddingPx + thumbRadiusPx
-                            val relativeY = (offset.y - trackTopY).coerceIn(0f, trackHeight)
-                            val newNormalized = 1f - (relativeY / trackHeight)
-                            val newValue = valueRange.start + newNormalized * (valueRange.endInclusive - valueRange.start)
-                            onValueChange(newValue)
-                            
-                            hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            lastHapticValue = newValue.roundToInt()
-                        }
-                    )
+
+                        isInteracting = false
+                        view.parent?.requestDisallowInterceptTouchEvent(false)
+                    }
                 }
         ) {
             val centerX = size.width / 2
@@ -1122,7 +1164,7 @@ private fun CustomVerticalSlider(
             ) {
                 // Rotate thumb based on normalized value (0 at bottom -> 360 at top)
                 rotate(
-                    degrees = normalizedValue * 360f,
+                    degrees = displayNormalizedValue * 360f,
                     pivot = androidx.compose.ui.geometry.Offset(thumbRadiusPx, thumbRadiusPx)
                 ) {
                     drawPath(
@@ -1601,6 +1643,7 @@ private fun HybridBandSliders(
         
         // Use pagerState.currentPage as the source of truth to avoid feedback loops
         val selectedTabIndex = pagerState.currentPage
+        val showBandPageTabIndicator = false
 
         Column(modifier = Modifier.padding(horizontal = 0.dp)) {
             // Tabs Row (Matching PresetTabsRow style)
@@ -1612,7 +1655,7 @@ private fun HybridBandSliders(
                 edgePadding = 12.dp,
                 divider = {},
                 indicator = { tabPositions ->
-                    if (selectedTabIndex < tabPositions.size) {
+                    if (showBandPageTabIndicator && selectedTabIndex < tabPositions.size) {
                          TabRowDefaults.PrimaryIndicator(
                             modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
                             height = 3.dp,

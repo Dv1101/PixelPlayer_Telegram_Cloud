@@ -9,6 +9,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
+import com.theveloper.pixelplay.data.repository.MusicRepository
 import com.theveloper.pixelplay.data.worker.SyncManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -17,6 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import java.io.File
@@ -46,11 +48,20 @@ data class SetupUiState(
 class SetupViewModel @Inject constructor(
     private val userPreferencesRepository: UserPreferencesRepository,
     private val syncManager: SyncManager,
+    private val musicRepository: MusicRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SetupUiState())
     val uiState = _uiState.asStateFlow()
+    
+    /**
+     * Expose sync progress for UI to show during initial setup
+     */
+    /**
+     * Expose sync progress for UI to show during initial setup
+     */
+    val isSyncing = syncManager.isSyncing
 
     private val fileExplorerStateHolder = FileExplorerStateHolder(userPreferencesRepository, viewModelScope, context)
 
@@ -60,6 +71,8 @@ class SetupViewModel @Inject constructor(
     val availableStorages = fileExplorerStateHolder.availableStorages
     val selectedStorageIndex = fileExplorerStateHolder.selectedStorageIndex
     val isLoadingDirectories = fileExplorerStateHolder.isLoading
+    private var hasPendingDirectoryRuleChanges = false
+    private var latestDirectoryRuleUpdateJob: Job? = null
 
     init {
         // Consolidated collectors using combine() to reduce coroutine overhead
@@ -149,8 +162,19 @@ class SetupViewModel @Inject constructor(
     }
 
     fun toggleDirectoryAllowed(file: File) {
-        fileExplorerStateHolder.toggleDirectoryAllowed(file)
-        syncManager.sync()
+        hasPendingDirectoryRuleChanges = true
+        latestDirectoryRuleUpdateJob = viewModelScope.launch {
+            fileExplorerStateHolder.toggleDirectoryAllowed(file)
+        }
+    }
+
+    fun applyPendingDirectoryRuleChanges() {
+        if (!hasPendingDirectoryRuleChanges) return
+        hasPendingDirectoryRuleChanges = false
+        viewModelScope.launch {
+            latestDirectoryRuleUpdateJob?.join()
+            syncManager.forceRefresh()
+        }
     }
 
     fun loadDirectory(file: File) {
@@ -199,6 +223,16 @@ class SetupViewModel @Inject constructor(
         viewModelScope.launch {
             userPreferencesRepository.setInitialSetupDone(true)
             // Use fullSync which bypasses MIN_SYNC_INTERVAL check and uses FULL mode
+            syncManager.fullSync()
+        }
+    }
+    
+    /**
+     * Retry the initial sync if it failed.
+     * Can be called from UI when user wants to retry after a failure.
+     */
+    fun retrySync() {
+        viewModelScope.launch {
             syncManager.fullSync()
         }
     }

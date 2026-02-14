@@ -14,6 +14,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
@@ -24,6 +27,7 @@ data class EqualizerUiState(
     val isEnabled: Boolean = false,
     val currentPreset: EqualizerPreset = EqualizerPreset.FLAT,
     val bandLevels: List<Int> = listOf(0, 0, 0, 0, 0),
+    val editingPresetName: String? = null,
     val bassBoostEnabled: Boolean = false,
     val bassBoostStrength: Float = 0f, // Changed to Float
     val virtualizerEnabled: Boolean = false,
@@ -66,6 +70,7 @@ class EqualizerViewModel @Inject constructor(
     
     companion object {
         private const val TAG = "EqualizerViewModel"
+        private const val SLIDER_PERSIST_DEBOUNCE_MS = 150L
         private val json = Json { ignoreUnknownKeys = true } // Assuming Json is needed
     }
 
@@ -80,6 +85,11 @@ class EqualizerViewModel @Inject constructor(
 
     private val _systemVolume = MutableStateFlow(0f)
     val systemVolume: StateFlow<Float> = _systemVolume.asStateFlow()
+
+    private var persistBandLevelsJob: Job? = null
+    private var persistBassBoostJob: Job? = null
+    private var persistVirtualizerJob: Job? = null
+    private var persistLoudnessJob: Job? = null
     
     init {
         initializeEqualizer()
@@ -114,29 +124,30 @@ class EqualizerViewModel @Inject constructor(
         viewModelScope.launch {
             Timber.tag(TAG).d("Initializing equalizer...")
             
-            // Restore preferences first
-            val enabled = userPreferencesRepository.equalizerEnabledFlow.first()
-            val presetName = userPreferencesRepository.equalizerPresetFlow.first()
-            val customBands = userPreferencesRepository.equalizerCustomBandsFlow.first()
-            val bassBoostEnabled = userPreferencesRepository.bassBoostEnabledFlow.first()
-            val bassBoost = userPreferencesRepository.bassBoostStrengthFlow.first()
-            val virtualizerEnabled = userPreferencesRepository.virtualizerEnabledFlow.first()
-            val virtualizer = userPreferencesRepository.virtualizerStrengthFlow.first()
-            val loudnessEnabled = userPreferencesRepository.loudnessEnhancerEnabledFlow.first()
-            val loudnessStrength = userPreferencesRepository.loudnessEnhancerStrengthFlow.first()
-            
-            // Restore state in manager before attaching
-            equalizerManager.restoreState(
-                enabled, presetName, customBands, 
-                bassBoostEnabled, bassBoost, 
-                virtualizerEnabled, virtualizer,
-                loudnessEnabled, loudnessStrength
-            )
-            
-            // Attach to initial audio session
-            val initialSessionId = dualPlayerEngine.getAudioSessionId()
-            if (initialSessionId != 0) {
-                equalizerManager.attachToAudioSession(initialSessionId)
+            if (!equalizerManager.isAttached) {
+                val enabled = userPreferencesRepository.equalizerEnabledFlow.first()
+                val presetName = userPreferencesRepository.equalizerPresetFlow.first()
+                val customBands = userPreferencesRepository.equalizerCustomBandsFlow.first()
+                val bassBoostEnabled = userPreferencesRepository.bassBoostEnabledFlow.first()
+                val bassBoost = userPreferencesRepository.bassBoostStrengthFlow.first()
+                val virtualizerEnabled = userPreferencesRepository.virtualizerEnabledFlow.first()
+                val virtualizer = userPreferencesRepository.virtualizerStrengthFlow.first()
+                val loudnessEnabled = userPreferencesRepository.loudnessEnhancerEnabledFlow.first()
+                val loudnessStrength = userPreferencesRepository.loudnessEnhancerStrengthFlow.first()
+                
+                equalizerManager.restoreState(
+                    enabled, presetName, customBands, 
+                    bassBoostEnabled, bassBoost, 
+                    virtualizerEnabled, virtualizer,
+                    loudnessEnabled, loudnessStrength
+                )
+                
+                val initialSessionId = dualPlayerEngine.getAudioSessionId()
+                if (initialSessionId != 0) {
+                    equalizerManager.attachToAudioSession(initialSessionId)
+                }
+            } else {
+                Timber.tag(TAG).d("Equalizer already attached by service, skipping restore.")
             }
             
             // Update UI state with device capabilities
@@ -146,14 +157,9 @@ class EqualizerViewModel @Inject constructor(
                 isLoudnessEnhancerSupported = equalizerManager.isLoudnessEnhancerSupported()
             )
 
-            // Observe audio session ID changes from DualPlayerEngine
             dualPlayerEngine.activeAudioSessionId.collect { sessionId ->
                 if (sessionId != 0) {
-                    Timber.tag(TAG).d("Audio Session ID changed to $sessionId. Re-attaching equalizer.")
-                    equalizerManager.attachToAudioSession(sessionId)
-                    
-                    // Update supported flags potentially? 
-                    // Usually capabilities are device-wide, but good to refresh if needed.
+                    Timber.tag(TAG).d("Audio Session ID changed to $sessionId.")
                     _uiState.value = _uiState.value.copy(
                         isBassBoostSupported = equalizerManager.isBassBoostSupported(),
                         isVirtualizerSupported = equalizerManager.isVirtualizerSupported(),
@@ -212,6 +218,7 @@ class EqualizerViewModel @Inject constructor(
                     isEnabled = enabled,
                     currentPreset = currentPreset,
                     bandLevels = if (currentPreset.name == "custom") customBands else currentPreset.bandLevels,
+                    editingPresetName = _uiState.value.editingPresetName,
                     bassBoostEnabled = bbEnabled,
                     bassBoostStrength = bbStrength.toFloat(), // Raw 0-1000
                     virtualizerEnabled = vEnabled,
@@ -249,8 +256,11 @@ class EqualizerViewModel @Inject constructor(
     }
     
     fun setEnabled(enabled: Boolean) {
+        equalizerManager.setEnabled(enabled)
+        _uiState.update { current ->
+            current.copy(isEnabled = enabled)
+        }
         viewModelScope.launch {
-            equalizerManager.setEnabled(enabled)
             userPreferencesRepository.setEqualizerEnabled(enabled)
         }
     }
@@ -260,8 +270,16 @@ class EqualizerViewModel @Inject constructor(
     }
     
     fun selectPreset(preset: EqualizerPreset) {
+        persistBandLevelsJob?.cancel()
+        equalizerManager.applyPreset(preset)
+        _uiState.update { current ->
+            current.copy(
+                currentPreset = preset,
+                bandLevels = preset.bandLevels,
+                editingPresetName = null
+            )
+        }
         viewModelScope.launch {
-            equalizerManager.applyPreset(preset)
             userPreferencesRepository.setEqualizerPreset(preset.name)
             if (!preset.isCustom) {
                 userPreferencesRepository.setEqualizerCustomBands(preset.bandLevels)
@@ -270,10 +288,25 @@ class EqualizerViewModel @Inject constructor(
     }
     
     fun setBandLevel(bandIndex: Int, level: Int) {
-        viewModelScope.launch {
-            equalizerManager.setBandLevel(bandIndex, level)
-            // Save custom bands when user adjusts manually
-            userPreferencesRepository.setEqualizerCustomBands(equalizerManager.bandLevels.value)
+        if (bandIndex !in _uiState.value.bandLevels.indices) return
+        val clampedLevel = level.coerceIn(-15, 15)
+
+        equalizerManager.setBandLevel(bandIndex, clampedLevel)
+        val updatedBands = equalizerManager.bandLevels.value
+        _uiState.update { current ->
+            val editingName = current.editingPresetName
+                ?: current.currentPreset.name.takeIf { current.currentPreset.isCustom && it != "custom" }
+            current.copy(
+                currentPreset = EqualizerPreset.custom(updatedBands),
+                bandLevels = updatedBands,
+                editingPresetName = editingName
+            )
+        }
+
+        persistBandLevelsJob?.cancel()
+        persistBandLevelsJob = viewModelScope.launch {
+            delay(SLIDER_PERSIST_DEBOUNCE_MS)
+            userPreferencesRepository.setEqualizerCustomBands(updatedBands)
             userPreferencesRepository.setEqualizerPreset("custom")
         }
     }
@@ -302,46 +335,91 @@ class EqualizerViewModel @Inject constructor(
             }
         }
     }
+    
+    fun renameCustomPreset(oldName: String, newName: String) {
+        if (newName.isBlank() || oldName == newName) return
+        viewModelScope.launch {
+            userPreferencesRepository.renameCustomPreset(oldName, newName)
+        }
+    }
+    
+    fun updateCustomPresetBands(presetName: String) {
+        viewModelScope.launch {
+            val bands = equalizerManager.bandLevels.value
+            userPreferencesRepository.updateCustomPresetBands(presetName, bands)
+            selectPreset(EqualizerPreset(presetName, presetName, bands, true))
+        }
+    }
 
     fun setBassBoostEnabled(enabled: Boolean) {
+        equalizerManager.setBassBoostEnabled(enabled)
+        _uiState.update { current ->
+            current.copy(bassBoostEnabled = enabled)
+        }
         viewModelScope.launch {
-            equalizerManager.setBassBoostEnabled(enabled)
             userPreferencesRepository.setBassBoostEnabled(enabled)
         }
     }
     
     fun setBassBoostStrength(strength: Int) {
-        viewModelScope.launch {
-            equalizerManager.setBassBoostStrength(strength)
-            userPreferencesRepository.setBassBoostStrength(strength)
+        val clampedStrength = strength.coerceIn(0, 1000)
+        equalizerManager.setBassBoostStrength(clampedStrength)
+        _uiState.update { current ->
+            current.copy(bassBoostStrength = clampedStrength.toFloat())
+        }
+
+        persistBassBoostJob?.cancel()
+        persistBassBoostJob = viewModelScope.launch {
+            delay(SLIDER_PERSIST_DEBOUNCE_MS)
+            userPreferencesRepository.setBassBoostStrength(clampedStrength)
         }
     }
 
     fun setVirtualizerEnabled(enabled: Boolean) {
+        equalizerManager.setVirtualizerEnabled(enabled)
+        _uiState.update { current ->
+            current.copy(virtualizerEnabled = enabled)
+        }
         viewModelScope.launch {
-            equalizerManager.setVirtualizerEnabled(enabled)
             userPreferencesRepository.setVirtualizerEnabled(enabled)
         }
     }
     
     fun setVirtualizerStrength(strength: Int) {
-        viewModelScope.launch {
-            equalizerManager.setVirtualizerStrength(strength)
-            userPreferencesRepository.setVirtualizerStrength(strength)
+        val clampedStrength = strength.coerceIn(0, 1000)
+        equalizerManager.setVirtualizerStrength(clampedStrength)
+        _uiState.update { current ->
+            current.copy(virtualizerStrength = clampedStrength.toFloat())
+        }
+
+        persistVirtualizerJob?.cancel()
+        persistVirtualizerJob = viewModelScope.launch {
+            delay(SLIDER_PERSIST_DEBOUNCE_MS)
+            userPreferencesRepository.setVirtualizerStrength(clampedStrength)
         }
     }
 
     fun setLoudnessEnhancerEnabled(enabled: Boolean) {
+        equalizerManager.setLoudnessEnhancerEnabled(enabled)
+        _uiState.update { current ->
+            current.copy(loudnessEnhancerEnabled = enabled)
+        }
         viewModelScope.launch {
-            equalizerManager.setLoudnessEnhancerEnabled(enabled)
             userPreferencesRepository.setLoudnessEnhancerEnabled(enabled)
         }
     }
 
     fun setLoudnessEnhancerStrength(strength: Int) {
-        viewModelScope.launch {
-            equalizerManager.setLoudnessEnhancerStrength(strength)
-            userPreferencesRepository.setLoudnessEnhancerStrength(strength)
+        val clampedStrength = strength.coerceIn(0, 3000)
+        equalizerManager.setLoudnessEnhancerStrength(clampedStrength)
+        _uiState.update { current ->
+            current.copy(loudnessEnhancerStrength = clampedStrength.toFloat())
+        }
+
+        persistLoudnessJob?.cancel()
+        persistLoudnessJob = viewModelScope.launch {
+            delay(SLIDER_PERSIST_DEBOUNCE_MS)
+            userPreferencesRepository.setLoudnessEnhancerStrength(clampedStrength)
         }
     }
 
@@ -402,6 +480,10 @@ class EqualizerViewModel @Inject constructor(
     }
     
     override fun onCleared() {
+        persistBandLevelsJob?.cancel()
+        persistBassBoostJob?.cancel()
+        persistVirtualizerJob?.cancel()
+        persistLoudnessJob?.cancel()
         super.onCleared()
         // Don't release equalizer here - it should persist across screen navigation
         Timber.tag(TAG).d("ViewModel cleared")

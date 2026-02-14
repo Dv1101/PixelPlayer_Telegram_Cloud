@@ -55,8 +55,18 @@ class TelegramStreamProxy @Inject constructor(
                 }
                 
                 // 1. Ensure download is started/active
-                val fileInfo = telegramRepository.downloadFile(fileId, 32) // High priority
+                var fileInfo = telegramRepository.downloadFile(fileId, 1)
+                
+                // 2. Wait for path to be assigned (TDLib might take a moment to allocate the file path)
+                var pathWaitCount = 0
+                while (fileInfo?.local?.path.isNullOrEmpty() && pathWaitCount < 50) { // Wait up to 2.5s
+                    delay(50)
+                    fileInfo = telegramRepository.getFile(fileId)
+                    pathWaitCount++
+                }
+
                 if (fileInfo?.local?.path.isNullOrEmpty()) {
+                    LogUtils.e("StreamProxy", null, "downloadFile returned null/empty path for fileId: $fileId after waiting")
                     call.respond(HttpStatusCode.InternalServerError, "Could not get file path")
                     return@get
                 }
@@ -79,12 +89,17 @@ class TelegramStreamProxy @Inject constructor(
 
                 // Wait for file to be created by TDLib
                 var waitCount = 0
-                while (!file.exists() && waitCount < 100) {
+                // Wait up to 15 seconds (300 * 50ms) for file to appear
+                while (!file.exists() && waitCount < 300) {
                      delay(50)
                      waitCount++
+                     if (waitCount % 20 == 0) {
+                         LogUtils.d("StreamProxy", "Waiting for file creation: $path ($waitCount/300)")
+                     }
                 }
                 
                 if (!file.exists()) {
+                     LogUtils.e("StreamProxy", null, "File not created by TDLib after 15s timeout: $path")
                      call.respond(HttpStatusCode.InternalServerError, "File not created by TDLib")
                      return@get
                 }
@@ -137,38 +152,49 @@ class TelegramStreamProxy @Inject constructor(
                         
                         raf.seek(currentPos)
                         
+                        var cachedDownloadedPrefixSize = fileInfo?.local?.downloadedPrefixSize?.toLong() ?: 0L
+
                         while (true) {
-                            // Check max read
+                            // 1. Check if we've reached the end of the requested range
                             val remaining = end - currentPos + 1
                             if (remaining <= 0) break
-                            
-                            val toRead = min(buffer.size.toLong(), remaining).toInt()
-                            
-                            val fileLength = raf.length()
-                            if (currentPos < fileLength) {
-                                val read = raf.read(buffer, 0, toRead)
-                                if (read > 0) {
-                                    writeFully(buffer, 0, read)
-                                    flush()
-                                    currentPos += read
-                                    noDataCount = 0
-                                } else {
-                                     // Should not happen if currentPos < fileLength, but safer to break or delay
-                                     delay(10)
+
+                            // 2. Check strict limit based on valid downloaded bytes
+                            if (currentPos >= cachedDownloadedPrefixSize) {
+                                // We reached the limit of what we know is downloaded. Refresh info.
+                                val updatedInfo = telegramRepository.getFile(fileId)
+                                cachedDownloadedPrefixSize = updatedInfo?.local?.downloadedPrefixSize?.toLong() ?: 0L
+
+                                // If still no new data, wait or check completion
+                                if (currentPos >= cachedDownloadedPrefixSize) {
+                                    if (updatedInfo?.local?.isDownloadingCompleted == true) {
+                                        // Download completed. If we are at/past expectation, we are done.
+                                        // If size is different than expected, we still stop because we can't get more.
+                                        break
+                                    }
+                                    
+                                    // Verify cancellation/failure
+                                    if (updatedInfo?.local?.isDownloadingCompleted == false && !updatedInfo.local.canBeDownloaded) {
+                                         break // Failed/Cancelled
+                                    }
+                                    
+                                    delay(50) // Wait for more data
+                                    continue
                                 }
+                            }
+
+                            // 3. Determine safe read amount
+                            // Read min of: buffer size, remaining in range, remaining valid bytes
+                            val remainingValid = cachedDownloadedPrefixSize - currentPos
+                            val toRead = min(buffer.size.toLong(), min(remaining, remainingValid)).toInt()
+                            
+                            val read = raf.read(buffer, 0, toRead)
+                            if (read > 0) {
+                                writeFully(buffer, 0, read)
+                                currentPos += read
+                                noDataCount = 0
                             } else {
-                                // Reached current end of file
-                                // Check if download is complete
-                                val currentFileInfo = telegramRepository.getFile(fileId)
-                                if (currentFileInfo?.local?.isDownloadingCompleted == true && currentPos >= currentFileInfo.size) {
-                                     break // Done
-                                }
-                                
-                                // Wait for more data
-                                noDataCount++
-                                if (noDataCount > 5000) { // ~50 seconds idle (5000 * 10ms)
-                                      break // Timeout
-                                }
+                                // Should not happen if logic matches, but safety check
                                 delay(10)
                             }
                         }

@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import androidx.work.OneTimeWorkRequest
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -13,10 +14,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.launch
+import com.theveloper.pixelplay.data.observer.MediaStoreObserver
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -49,7 +50,8 @@ data class SyncProgress(
 @Singleton
 class SyncManager @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val userPreferencesRepository: UserPreferencesRepository
+    private val userPreferencesRepository: UserPreferencesRepository,
+    private val mediaStoreObserver: MediaStoreObserver
 ) {
     private val workManager = WorkManager.getInstance(context)
     private val sharingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -68,6 +70,10 @@ class SyncManager @Inject constructor(
                 started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
                 replay = 1
             )
+
+    init {
+        // Ensure worker is not cancelled blindly on startup
+    }
 
     /**
      * Flow that exposes the detailed sync progress including song count.
@@ -122,25 +128,23 @@ class SyncManager @Inject constructor(
 
     fun sync() {
         sharingScope.launch {
-            val lastSyncTime = userPreferencesRepository.getLastSyncTimestamp()
-            val currentTime = System.currentTimeMillis()
+            val now = System.currentTimeMillis()
+            val lastSyncTimestamp = userPreferencesRepository.getLastSyncTimestamp()
+            val shouldRunSync =
+                lastSyncTimestamp <= 0L || (now - lastSyncTimestamp) >= MIN_SYNC_INTERVAL_MS
 
-            if (lastSyncTime == 0L || (currentTime - lastSyncTime) >= MIN_SYNC_INTERVAL_MS) {
-                Log.d(TAG, "Syncing library (last sync: ${(currentTime - lastSyncTime) / 1000}s ago)")
-                val syncRequest = if (lastSyncTime == 0L) {
-                    Log.d(TAG, "Initial sync detected. Using REBUILD mode for maximum speed.")
-                    SyncWorker.rebuildDatabaseWork()
-                } else {
-                    SyncWorker.startUpSyncWork()
-                }
-                workManager.enqueueUniqueWork(
-                    SyncWorker.WORK_NAME,
-                    ExistingWorkPolicy.REPLACE,
-                    syncRequest
-                )
-            } else {
-                Log.d(TAG, "Skipping sync - last sync was ${(currentTime - lastSyncTime) / 1000}s ago (min: ${MIN_SYNC_INTERVAL_MS / 1000}s)")
+            if (!shouldRunSync) {
+                val ageSeconds = (now - lastSyncTimestamp) / 1000
+                Log.d(TAG, "Skipping startup sync (last sync ${ageSeconds}s ago)")
+                return@launch
             }
+
+            Log.i(TAG, "Startup sync requested - Scheduling Incremental Sync")
+            enqueueSyncWork(
+                request = SyncWorker.incrementalSyncWork(),
+                policy = ExistingWorkPolicy.KEEP,
+                notifyObserver = false
+            )
         }
     }
 
@@ -150,11 +154,10 @@ class SyncManager @Inject constructor(
      * This is the recommended sync method for pull-to-refresh actions.
      */
     fun incrementalSync() {
-        val syncRequest = SyncWorker.incrementalSyncWork()
-        workManager.enqueueUniqueWork(
-            SyncWorker.WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
-            syncRequest
+        Log.i(TAG, "Incremental sync requested - Scheduling incremental worker")
+        enqueueSyncWork(
+            request = SyncWorker.incrementalSyncWork(),
+            policy = ExistingWorkPolicy.REPLACE
         )
     }
 
@@ -163,11 +166,10 @@ class SyncManager @Inject constructor(
      * Use this when the user explicitly wants to force a complete rescan.
      */
     fun fullSync() {
-        val syncRequest = SyncWorker.fullSyncWork(deepScan = false)
-        workManager.enqueueUniqueWork(
-            SyncWorker.WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
-            syncRequest
+        Log.i(TAG, "Full sync requested - Scheduling full sync worker")
+        enqueueSyncWork(
+            request = SyncWorker.fullSyncWork(),
+            policy = ExistingWorkPolicy.REPLACE
         )
     }
 
@@ -177,11 +179,10 @@ class SyncManager @Inject constructor(
      * Use when database is corrupted or songs are missing.
      */
     fun rebuildDatabase() {
-        val syncRequest = SyncWorker.rebuildDatabaseWork()
-        workManager.enqueueUniqueWork(
-            SyncWorker.WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
-            syncRequest
+        Log.i(TAG, "Rebuild database requested - Scheduling rebuild worker")
+        enqueueSyncWork(
+            request = SyncWorker.rebuildDatabaseWork(),
+            policy = ExistingWorkPolicy.REPLACE
         )
     }
 
@@ -190,16 +191,31 @@ class SyncManager @Inject constructor(
      * existente. Ideal para el botón de "Refrescar Biblioteca".
      */
     fun forceRefresh() {
-        val syncRequest = SyncWorker.startUpSyncWork(true)
+        Log.i(TAG, "Force refresh requested - Scheduling incremental worker")
+        enqueueSyncWork(
+            request = SyncWorker.incrementalSyncWork(),
+            policy = ExistingWorkPolicy.REPLACE
+        )
+    }
+
+    private fun enqueueSyncWork(
+        request: OneTimeWorkRequest,
+        policy: ExistingWorkPolicy,
+        notifyObserver: Boolean = true
+    ) {
         workManager.enqueueUniqueWork(
             SyncWorker.WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
-            syncRequest
+            policy,
+            request
         )
+        if (notifyObserver) {
+            // Keep reactive MediaStore-based views in sync with manual refresh actions.
+            mediaStoreObserver.forceRescan()
+        }
     }
 
     companion object {
         private const val TAG = "SyncManager"
-        private const val MIN_SYNC_INTERVAL_MS = 5 * 60 * 1000L // 5 minutes
+        private const val MIN_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000L // 6 hours
     }
 }

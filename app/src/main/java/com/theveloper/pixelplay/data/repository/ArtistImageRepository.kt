@@ -23,6 +23,7 @@ class ArtistImageRepository @Inject constructor(
     companion object {
         private const val TAG = "ArtistImageRepository"
         private const val CACHE_SIZE = 100 // Number of artist images to cache in memory
+        private val deezerSizeRegex = Regex("/\\d{2,4}x\\d{2,4}([\\-.])")
     }
 
     // In-memory LRU cache for quick access
@@ -31,6 +32,9 @@ class ArtistImageRepository @Inject constructor(
     // Mutex to prevent duplicate API calls for the same artist
     private val fetchMutex = Mutex()
     private val pendingFetches = mutableSetOf<String>()
+    
+    // Set to track artists for whom image fetching failed (e.g. not found), to avoid retrying in the same session
+    private val failedFetches = mutableSetOf<String>()
 
     /**
      * Get artist image URL, fetching from Deezer if not cached.
@@ -47,18 +51,32 @@ class ArtistImageRepository @Inject constructor(
         memoryCache.get(normalizedName)?.let { cachedUrl ->
             return cachedUrl
         }
+        
+        // Check if previously failed
+        if (failedFetches.contains(normalizedName)) {
+            return null
+        }
 
-        // Check database cache
-        val dbCachedUrl = withContext(Dispatchers.IO) {
-            musicDao.getArtistImageUrl(artistId)
+        // Resolve canonical DB artist row by name to avoid MediaStore-ID/DB-ID mismatches.
+        val (resolvedArtistId, dbCachedUrl) = withContext(Dispatchers.IO) {
+            val canonicalArtistId = musicDao.getArtistIdByNormalizedName(artistName) ?: artistId
+            val cachedUrl = musicDao.getArtistImageUrl(canonicalArtistId)
+                ?: musicDao.getArtistImageUrlByNormalizedName(artistName)
+            canonicalArtistId to cachedUrl
         }
         if (!dbCachedUrl.isNullOrEmpty()) {
-            memoryCache.put(normalizedName, dbCachedUrl)
-            return dbCachedUrl
+            val upgradedDbUrl = upgradeToHighResDeezerUrl(dbCachedUrl)
+            memoryCache.put(normalizedName, upgradedDbUrl)
+            if (upgradedDbUrl != dbCachedUrl) {
+                withContext(Dispatchers.IO) {
+                    musicDao.updateArtistImageUrl(resolvedArtistId, upgradedDbUrl)
+                }
+            }
+            return upgradedDbUrl
         }
 
         // Fetch from Deezer API
-        return fetchAndCacheArtistImage(artistName, artistId, normalizedName)
+        return fetchAndCacheArtistImage(artistName, resolvedArtistId, normalizedName)
     }
 
     /**
@@ -69,14 +87,20 @@ class ArtistImageRepository @Inject constructor(
         withContext(Dispatchers.IO) {
             artists.forEach { (artistId, artistName) ->
                 try {
-                    getArtistImageUrl(artistName, artistId)
+                     val normalizedName = artistName.trim().lowercase()
+                     // Only fetch if not in memory, not failed, and not pending
+                     if(memoryCache.get(normalizedName) == null && !failedFetches.contains(normalizedName)) {
+                         getArtistImageUrl(artistName, artistId)
+                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to prefetch image for $artistName: ${e.message}")
                 }
             }
         }
     }
-
+    
+    // ... fetchAndCacheArtistImage method ...
+    
     private suspend fun fetchAndCacheArtistImage(
         artistName: String,
         artistId: Long,
@@ -96,11 +120,12 @@ class ArtistImageRepository @Inject constructor(
                 val deezerArtist = response.data.firstOrNull()
 
                 if (deezerArtist != null) {
-                    // Use picture_medium for list views, picture_big for detail views
-                    // We store the medium size as default, UI can request bigger sizes if needed
-                    val imageUrl = deezerArtist.pictureMedium 
-                        ?: deezerArtist.pictureBig 
-                        ?: deezerArtist.picture
+                    val imageUrl = (
+                        deezerArtist.pictureXl
+                            ?: deezerArtist.pictureBig
+                            ?: deezerArtist.pictureMedium
+                            ?: deezerArtist.picture
+                        )?.let(::upgradeToHighResDeezerUrl)
 
                     if (!imageUrl.isNullOrEmpty()) {
                         // Cache in memory
@@ -116,11 +141,16 @@ class ArtistImageRepository @Inject constructor(
                     }
                 } else {
                     Log.d(TAG, "No Deezer artist found for: $artistName")
+                    failedFetches.add(normalizedName) // Mark as failed
                     null
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching artist image for $artistName: ${e.message}")
+            // Consider transient errors? For now treating as failed to avoid spam.
+            if(e !is java.net.SocketTimeoutException) {
+                failedFetches.add(normalizedName)
+            }
             null
         } finally {
             fetchMutex.withLock {
@@ -128,11 +158,17 @@ class ArtistImageRepository @Inject constructor(
             }
         }
     }
-
+    
     /**
      * Clear all cached images. Useful for debugging or forced refresh.
      */
     fun clearCache() {
         memoryCache.evictAll()
+        failedFetches.clear()
+    }
+
+    private fun upgradeToHighResDeezerUrl(url: String): String {
+        if (!url.contains("dzcdn.net/images/artist")) return url
+        return deezerSizeRegex.replace(url, "/1000x1000$1")
     }
 }

@@ -1,15 +1,12 @@
 package com.theveloper.pixelplay.presentation.model
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Style
 import androidx.compose.material.icons.rounded.DeveloperMode
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Palette
-import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.theveloper.pixelplay.R
 
@@ -38,11 +35,23 @@ enum class SettingsCategory(
         subtitle = "Audio behavior, crossfade, and background play",
         icon = Icons.Rounded.MusicNote // Using MusicNote again or maybe PlayCircle if available
     ),
+    BEHAVIOR(
+        id = "behavior",
+        title = "Behavior",
+        subtitle = "Gestures, haptics, and navigation behavior",
+        iconRes = R.drawable.rounded_touch_app_24
+    ),
     AI_INTEGRATION(
         id = "ai",
         title = "AI Integration (Beta)",
         subtitle = "Gemini API key and AI features",
         iconRes = R.drawable.gemini_ai
+    ),
+    BACKUP_RESTORE(
+        id = "backup_restore",
+        title = "Backup & Restore",
+        subtitle = "Export and recover your personal app data",
+        iconRes = R.drawable.rounded_upload_file_24
     ),
     DEVELOPER(
         id = "developer",
@@ -55,6 +64,12 @@ enum class SettingsCategory(
         title = "Equalizer",
         subtitle = "Adjust audio frequencies and presets",
         icon = Icons.Rounded.GraphicEq
+    ),
+    DEVICE_CAPABILITIES(
+        id = "device_capabilities",
+        title = "Device Capabilities",
+        subtitle = "Audio specs, codecs, and decoder info",
+        icon = Icons.Rounded.Info // Placeholder, maybe Memory or SettingsInputComponent
     ),
     ABOUT(
         id = "about",

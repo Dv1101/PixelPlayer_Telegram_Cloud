@@ -26,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +38,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.media3.common.util.UnstableApi
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.presentation.components.subcomps.LibraryActionRow
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
@@ -44,11 +46,12 @@ import com.theveloper.pixelplay.presentation.viewmodel.PlaylistUiState
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistViewModel
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 
+@androidx.annotation.OptIn(UnstableApi::class)
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun PlaylistBottomSheet(
     playlistUiState: PlaylistUiState,
-    song: Song,
+    songs: List<Song>,
     onDismiss: () -> Unit,
     bottomBarHeight: Dp,
     playerViewModel: PlayerViewModel,
@@ -67,14 +70,21 @@ fun PlaylistBottomSheet(
         if (searchQuery.isBlank()) playlistUiState.playlists
         else playlistUiState.playlists.filter { it.name.contains(searchQuery, true) }
     }
+    val hasGeminiApiKey by playerViewModel.hasGeminiApiKey.collectAsState()
 
     val selectedPlaylists = remember {
         mutableStateMapOf<String, Boolean>().apply {
-            filteredPlaylists.forEach {
-                put(
-                    it.id,
-                    it.songIds.contains(song.id)
-                )
+            if (songs.size == 1) {
+                // Single song: pre-select playlists containing it
+                val songId = songs.first().id
+                filteredPlaylists.forEach {
+                    put(it.id, it.songIds.contains(songId))
+                }
+            } else {
+                // Multiple songs: start empty (additive only)
+                filteredPlaylists.forEach {
+                    put(it.id, false)
+                }
             }
         }
     }
@@ -96,7 +106,7 @@ fun PlaylistBottomSheet(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        "Select Playlists",
+                        if (songs.size > 1) "Add ${songs.size} Songs to..." else "Select Playlists",
                         style = MaterialTheme.typography.displaySmall,
                         fontFamily = GoogleSansRounded
                     )
@@ -142,12 +152,12 @@ fun PlaylistBottomSheet(
                     },
                     iconRotation = 0f,
                     showSortButton = false,
-                    showGenerateButton = false,
                     onSortClick = { },
                     isPlaylistTab = true,
                     isFoldersTab = false,
-                    onGenerateWithAiClick = { },
                     currentFolder = null,
+                    folderRootPath = "",
+                    folderRootLabel = "Internal Storage",
                     onFolderClick = { },
                     onNavigateBack = { }
                 )
@@ -162,7 +172,7 @@ fun PlaylistBottomSheet(
                     navController = null,
                     playerViewModel = playerViewModel,
                     isAddingToPlaylist = true,
-                    currentSong = song,
+                    currentSong = songs.firstOrNull() ?: Song.emptySong(), // Fallback safe
                     filteredPlaylists = filteredPlaylists,
                     selectedPlaylists = selectedPlaylists
                 )
@@ -171,12 +181,19 @@ fun PlaylistBottomSheet(
                     CreatePlaylistDialogRedesigned(
                         onDismiss = { showCreatePlaylistDialog = false },
                         onCreate = { name ->
-                            playlistViewModel.createPlaylist(name) // Pass the actual name
+                            // Pass all selected songs to the new playlist
+                            playlistViewModel.createPlaylist(name, songIds = songs.map { it.id })
                             showCreatePlaylistDialog = false
+                            onDismiss() // Close sheet after creation + add
+                            playerViewModel.sendToast("Playlist created and songs added")
                         },
                         onGenerateClick = {
                             showCreatePlaylistDialog = false
-                            playerViewModel.showAiPlaylistSheet()
+                            if (hasGeminiApiKey) {
+                                playerViewModel.showAiPlaylistSheet()
+                            } else {
+                                playerViewModel.sendToast("Set your Gemini API key first")
+                            }
                         }
                     )
                 }
@@ -188,16 +205,27 @@ fun PlaylistBottomSheet(
                     .padding(bottom = 18.dp, end = 8.dp),
                 shape = CircleShape,
                 onClick = {
-                    playlistViewModel.addOrRemoveSongFromPlaylists(
-                        song.id,
-                        selectedPlaylists.filter { it.value }.keys.toList(),
-                        currentPlaylistId
-                    )
+                    if (songs.size == 1) {
+                         playlistViewModel.addOrRemoveSongFromPlaylists(
+                            songs.first().id,
+                            selectedPlaylists.filter { it.value }.keys.toList(),
+                            currentPlaylistId
+                        )
+                    } else {
+                         // Batch add
+                         val selectedPlaylistIds = selectedPlaylists.filter { it.value }.keys.toList()
+                         if (selectedPlaylistIds.isNotEmpty()) {
+                             playlistViewModel.addSongsToPlaylists(
+                                 songs.map { it.id },
+                                 selectedPlaylistIds
+                             )
+                         }
+                    }
                     onDismiss()
-                    playerViewModel.sendToast("Saved")
+                    playerViewModel.sendToast(if (songs.size > 1) "Songs added to playlists" else "Saved")
                 },
                 icon = { Icon(Icons.Rounded.Save, "Save") },
-                text = { Text("Save") },
+                text = { Text(if (songs.size > 1) "Add" else "Save") },
             )
         }
     }

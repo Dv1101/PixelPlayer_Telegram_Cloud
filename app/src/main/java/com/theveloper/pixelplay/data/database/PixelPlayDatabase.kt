@@ -16,9 +16,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         SongArtistCrossRef::class,
         TelegramSongEntity::class,
         TelegramChannelEntity::class,
-        SongEngagementEntity::class
+        SongEngagementEntity::class,
+        FavoritesEntity::class,
+        LyricsEntity::class
     ],
-    version = 15, // Incremented for combined updates
+    version = 19, // Incremented for combined updates
+
     exportSchema = false
 )
 abstract class PixelPlayDatabase : RoomDatabase() {
@@ -28,6 +31,8 @@ abstract class PixelPlayDatabase : RoomDatabase() {
     abstract fun transitionDao(): TransitionDao
     abstract fun telegramDao(): TelegramDao
     abstract fun engagementDao(): EngagementDao
+    abstract fun favoritesDao(): FavoritesDao
+    abstract fun lyricsDao(): LyricsDao // Added FavoritesDao
 
     companion object {
         val MIGRATION_3_4 = object : Migration(3, 4) {
@@ -122,7 +127,7 @@ abstract class PixelPlayDatabase : RoomDatabase() {
             }
         }
         
-        val MIGRATION_14_15 = object : Migration(14, 15) {
+        val MIGRATION_15_16 = object : Migration(15, 16) {
              override fun migrate(db: SupportSQLiteDatabase) {
                 // Create song_engagements table for tracking play statistics
                 db.execSQL("""
@@ -133,6 +138,172 @@ abstract class PixelPlayDatabase : RoomDatabase() {
                         last_played_timestamp INTEGER NOT NULL DEFAULT 0
                     )
                 """.trimIndent())
+
+                // Fix for album_art_themes schema mismatch (Backport upstream MIGRATION_14_15 logic)
+                // Since this table is a cache and the schema is complex (100 columns), it is safer to DROP and RECREATE
+                // to ensure it exactly matches AlbumArtThemeEntity and avoid validation crashes.
+                db.execSQL("DROP TABLE IF EXISTS album_art_themes")
+
+                val colorColumns = listOf(
+                    "primary", "onPrimary", "primaryContainer", "onPrimaryContainer",
+                    "secondary", "onSecondary", "secondaryContainer", "onSecondaryContainer",
+                    "tertiary", "onTertiary", "tertiaryContainer", "onTertiaryContainer",
+                    "background", "onBackground", "surface", "onSurface",
+                    "surfaceVariant", "onSurfaceVariant", "error", "onError",
+                    "outline", "errorContainer", "onErrorContainer",
+                    "inversePrimary", "inverseSurface", "inverseOnSurface",
+                    "surfaceTint", "outlineVariant", "scrim",
+                    "surfaceBright", "surfaceDim",
+                    "surfaceContainer", "surfaceContainerHigh", "surfaceContainerHighest", "surfaceContainerLow", "surfaceContainerLowest",
+                    "primaryFixed", "primaryFixedDim", "onPrimaryFixed", "onPrimaryFixedVariant",
+                    "secondaryFixed", "secondaryFixedDim", "onSecondaryFixed", "onSecondaryFixedVariant",
+                    "tertiaryFixed", "tertiaryFixedDim", "onTertiaryFixed", "onTertiaryFixedVariant"
+                )
+
+                val themePrefixes = listOf("light_", "dark_")
+                val columnDefinitions = StringBuilder()
+                
+                // Add standard columns
+                columnDefinitions.append("albumArtUriString TEXT NOT NULL, ")
+                columnDefinitions.append("paletteStyle TEXT NOT NULL, ")
+
+                // Add dynamic color columns
+                themePrefixes.forEach { prefix ->
+                    colorColumns.forEach { column ->
+                        columnDefinitions.append("${prefix}${column} TEXT NOT NULL, ")
+                    }
+                }
+
+                // Remove trailing comma and space
+                val columnsSql = columnDefinitions.toString().trimEnd(',', ' ')
+
+                db.execSQL("CREATE TABLE IF NOT EXISTS album_art_themes ($columnsSql, PRIMARY KEY(albumArtUriString))")
+            }
+        }
+        
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                try {
+                    db.execSQL("ALTER TABLE songs ADD COLUMN telegram_chat_id INTEGER DEFAULT NULL")
+                } catch (e: Exception) {
+                    // Column might already exist
+                }
+                try {
+                    db.execSQL("ALTER TABLE songs ADD COLUMN telegram_file_id INTEGER DEFAULT NULL")
+                } catch (e: Exception) {
+                    // Column might already exist
+                }
+
+                // Fix for album_art_themes schema mismatch if user is coming from version 16 (where the schema might be broken)
+                // We re-apply the DROP and RECREATE strategy here to ensure everyone ends up with the correct schema.
+                db.execSQL("DROP TABLE IF EXISTS album_art_themes")
+
+                val colorColumns = listOf(
+                    "primary", "onPrimary", "primaryContainer", "onPrimaryContainer",
+                    "secondary", "onSecondary", "secondaryContainer", "onSecondaryContainer",
+                    "tertiary", "onTertiary", "tertiaryContainer", "onTertiaryContainer",
+                    "background", "onBackground", "surface", "onSurface",
+                    "surfaceVariant", "onSurfaceVariant", "error", "onError",
+                    "outline", "errorContainer", "onErrorContainer",
+                    "inversePrimary", "inverseSurface", "inverseOnSurface",
+                    "surfaceTint", "outlineVariant", "scrim",
+                    "surfaceBright", "surfaceDim",
+                    "surfaceContainer", "surfaceContainerHigh", "surfaceContainerHighest", "surfaceContainerLow", "surfaceContainerLowest",
+                    "primaryFixed", "primaryFixedDim", "onPrimaryFixed", "onPrimaryFixedVariant",
+                    "secondaryFixed", "secondaryFixedDim", "onSecondaryFixed", "onSecondaryFixedVariant",
+                    "tertiaryFixed", "tertiaryFixedDim", "onTertiaryFixed", "onTertiaryFixedVariant"
+                )
+
+                val themePrefixes = listOf("light_", "dark_")
+                val columnDefinitions = StringBuilder()
+                
+                // Add standard columns
+                columnDefinitions.append("albumArtUriString TEXT NOT NULL, ")
+                columnDefinitions.append("paletteStyle TEXT NOT NULL, ")
+
+                // Add dynamic color columns
+                themePrefixes.forEach { prefix ->
+                    colorColumns.forEach { column ->
+                        columnDefinitions.append("${prefix}${column} TEXT NOT NULL, ")
+                    }
+                }
+
+                // Remove trailing comma and space
+                val columnsSql = columnDefinitions.toString().trimEnd(',', ' ')
+
+                db.execSQL("CREATE TABLE IF NOT EXISTS album_art_themes ($columnsSql, PRIMARY KEY(albumArtUriString))")
+            }
+        }
+
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS favorites (
+                        songId INTEGER NOT NULL PRIMARY KEY,
+                        isFavorite INTEGER NOT NULL,
+                        timestamp INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                
+                // Migrate existing favorites from songs table if possible
+                // Note: We need to cast is_favorite (boolean/int) to ensure compatibility
+                db.execSQL("""
+                    INSERT OR IGNORE INTO favorites (songId, isFavorite, timestamp)
+                    SELECT id, is_favorite, ? FROM songs WHERE is_favorite = 1
+                """, arrayOf(System.currentTimeMillis()))
+            }
+        }
+
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `lyrics` (`songId` INTEGER NOT NULL, `content` TEXT NOT NULL, `isSynced` INTEGER NOT NULL DEFAULT 0, `source` TEXT, PRIMARY KEY(`songId`))"
+                )
+                database.execSQL(
+                    "INSERT INTO lyrics (songId, content) SELECT id, lyrics FROM songs WHERE lyrics IS NOT NULL AND lyrics != ''"
+                )
+            }
+        }
+
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE album_art_themes ADD COLUMN paletteStyle TEXT NOT NULL DEFAULT 'tonal_spot'"
+                )
+
+                val newRoleColumns = listOf(
+                    "surfaceBright",
+                    "surfaceDim",
+                    "surfaceContainer",
+                    "surfaceContainerHigh",
+                    "surfaceContainerHighest",
+                    "surfaceContainerLow",
+                    "surfaceContainerLowest",
+                    "primaryFixed",
+                    "primaryFixedDim",
+                    "onPrimaryFixed",
+                    "onPrimaryFixedVariant",
+                    "secondaryFixed",
+                    "secondaryFixedDim",
+                    "onSecondaryFixed",
+                    "onSecondaryFixedVariant",
+                    "tertiaryFixed",
+                    "tertiaryFixedDim",
+                    "onTertiaryFixed",
+                    "onTertiaryFixedVariant"
+                )
+
+                val prefixes = listOf("light_", "dark_")
+                prefixes.forEach { prefix ->
+                    newRoleColumns.forEach { role ->
+                        database.execSQL(
+                            "ALTER TABLE album_art_themes ADD COLUMN ${prefix}${role} TEXT NOT NULL DEFAULT '#00000000'"
+                        )
+                    }
+                }
+
+                // The table is a cache; wipe stale rows so we always regenerate with full token data.
+                database.execSQL("DELETE FROM album_art_themes")
             }
         }
     }

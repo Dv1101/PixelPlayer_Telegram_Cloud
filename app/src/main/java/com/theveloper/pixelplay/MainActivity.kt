@@ -6,7 +6,6 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Color
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Trace
@@ -32,7 +31,6 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -44,7 +42,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -62,6 +59,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,7 +68,11 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
+
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.core.net.toUri
@@ -103,6 +105,7 @@ import com.theveloper.pixelplay.presentation.components.NavBarContentHeight
 import com.theveloper.pixelplay.presentation.components.NavBarContentHeightFullWidth
 import com.theveloper.pixelplay.presentation.components.PlayerInternalNavigationBar
 import com.theveloper.pixelplay.presentation.components.UnifiedPlayerSheet
+import com.theveloper.pixelplay.presentation.components.UnifiedPlayerSheetV2
 import com.theveloper.pixelplay.presentation.navigation.AppNavigation
 import com.theveloper.pixelplay.presentation.navigation.Screen
 import com.theveloper.pixelplay.presentation.screens.SetupScreen
@@ -110,15 +113,22 @@ import com.theveloper.pixelplay.presentation.viewmodel.MainViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.ui.theme.PixelPlayTheme
 import com.theveloper.pixelplay.utils.CrashHandler
-import com.theveloper.pixelplay.utils.CrashLogData
 import com.theveloper.pixelplay.utils.LogUtils
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
-import javax.annotation.concurrent.Immutable
 import javax.inject.Inject
+
+import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
+import com.theveloper.pixelplay.presentation.utils.AppHapticsConfig
+import com.theveloper.pixelplay.presentation.utils.LocalAppHapticsConfig
+import com.theveloper.pixelplay.presentation.utils.NoOpHapticFeedback
+import com.theveloper.pixelplay.utils.CrashLogData
+import javax.annotation.concurrent.Immutable
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+
 
 @Immutable
 data class BottomNavItem(
@@ -126,6 +136,11 @@ data class BottomNavItem(
     @DrawableRes val iconResId: Int,
     @DrawableRes val selectedIconResId: Int? = null,
     val screen: Screen
+)
+
+private data class DismissUndoBarSlice(
+    val isVisible: Boolean = false,
+    val durationMillis: Long = 4000L
 )
 
 @UnstableApi
@@ -136,9 +151,6 @@ class MainActivity : ComponentActivity() {
     private var mediaControllerFuture: ListenableFuture<MediaController>? = null
     @Inject
     lateinit var userPreferencesRepository: UserPreferencesRepository // Inject here
-    @Inject
-    lateinit var syncManager: SyncManager
-    
     // For handling shortcut navigation - using StateFlow so composables can observe changes
     private val _pendingPlaylistNavigation = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     private val _pendingShuffleAll = kotlinx.coroutines.flow.MutableStateFlow(false)
@@ -147,6 +159,7 @@ class MainActivity : ComponentActivity() {
         // Handle the result in onResume
     }
 
+    @OptIn(ExperimentalPermissionsApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         LogUtils.d(this, "onCreate")
         installSplashScreen()
@@ -177,14 +190,44 @@ class MainActivity : ComponentActivity() {
             // Crash report dialog state
             var showCrashReportDialog by remember { mutableStateOf(false) }
             var crashLogData by remember { mutableStateOf<CrashLogData?>(null) }
-
-            LaunchedEffect(isSetupComplete) {
-                showSetupScreen = if (isBenchmarkMode) false else !isSetupComplete
-            }
             
+            // Permissions Logic
+            val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                listOf(Manifest.permission.READ_MEDIA_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
+            @OptIn(ExperimentalPermissionsApi::class)
+            val permissionState = rememberMultiplePermissionsState(permissions = permissions)
+            val needsAllFilesAccess = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                    !android.os.Environment.isExternalStorageManager()
+
+            // Determine if we need to show Setup based on completion OR missing permissions
+            val permissionsValid = permissionState.allPermissionsGranted && !needsAllFilesAccess
+
+            LaunchedEffect(isSetupComplete, permissionsValid) {
+                // If benchmark, skip setup.
+                // Otherwise, show setup if: Setup incomplete OR Permissions invalid
+                // FIX: Only Open setup automatically. Close is handled by callback to prevent premature closing if permissions change mid-flow.
+                if (!isBenchmarkMode && (!isSetupComplete || !permissionsValid)) {
+                    showSetupScreen = true
+                } else if (showSetupScreen == null) {
+                    // FIX: If starting up and conditions are valid, explicitly go to main app.
+                    showSetupScreen = false
+                }
+            }
+
+            // Sync Trigger: When we are NOT showing setup (meaning permissions are good and setup is done)
+            LaunchedEffect(showSetupScreen) {
+                if (showSetupScreen == false) {
+                     LogUtils.i(this, "Setup complete/skipped and permissions valid. Starting sync.")
+                     mainViewModel.startSync()
+                }
+            }
+
             // Check for crash log when app starts
             LaunchedEffect(Unit) {
-                if (CrashHandler.hasCrashLog()) {
+                if (!isBenchmarkMode && CrashHandler.hasCrashLog()) {
                     crashLogData = CrashHandler.getCrashLog()
                     showCrashReportDialog = true
                 }
@@ -210,9 +253,15 @@ class MainActivity : ComponentActivity() {
                             label = "SetupTransition"
                         ) { targetState ->
                             if (targetState == true) {
-                                SetupScreen(onSetupComplete = { showSetupScreen = false })
+                                SetupScreen(onSetupComplete = {
+                                    // Re-check permissions on completion.
+                                    // If permissions are still missing despite setup "completing" (e.g. user skipped or ignored?), 
+                                    // the LaunchedEffect(permissionsValid) above handles state, 
+                                    // but we explicitly update local state here too.
+                                    showSetupScreen = false
+                                })
                             } else {
-                                HandlePermissions(mainViewModel, isBenchmarkMode)
+                                MainAppContent(playerViewModel, mainViewModel)
                             }
                         }
                     }
@@ -261,7 +310,7 @@ class MainActivity : ComponentActivity() {
                 playerViewModel.showPlayer()
             }
 
-            intent.action == Intent.ACTION_VIEW && intent.data != null -> {
+            intent.action == android.content.Intent.ACTION_VIEW && intent.data != null -> {
                 intent.data?.let { uri ->
                     persistUriPermissionIfNeeded(intent, uri)
                     playerViewModel.playExternalUri(uri)
@@ -269,7 +318,7 @@ class MainActivity : ComponentActivity() {
                 clearExternalIntentPayload(intent)
             }
 
-            intent.action == Intent.ACTION_SEND && intent.type?.startsWith("audio/") == true -> {
+            intent.action == android.content.Intent.ACTION_SEND && intent.type?.startsWith("audio/") == true -> {
                 resolveStreamUri(intent)?.let { uri ->
                     persistUriPermissionIfNeeded(intent, uri)
                     playerViewModel.playExternalUri(uri)
@@ -299,12 +348,12 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_PLAYLIST_ID = "playlist_id"
     }
 
-    private fun resolveStreamUri(intent: Intent): Uri? {
+    private fun resolveStreamUri(intent: Intent): android.net.Uri? {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)?.let { return it }
+            intent.getParcelableExtra(android.content.Intent.EXTRA_STREAM, android.net.Uri::class.java)?.let { return it }
         } else {
             @Suppress("DEPRECATION")
-            val legacyUri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+            val legacyUri = intent.getParcelableExtra<android.net.Uri>(android.content.Intent.EXTRA_STREAM)
             if (legacyUri != null) return legacyUri
         }
 
@@ -317,18 +366,18 @@ class MainActivity : ComponentActivity() {
         return intent.data
     }
 
-    private fun persistUriPermissionIfNeeded(intent: Intent, uri: Uri) {
+    private fun persistUriPermissionIfNeeded(intent: Intent, uri: android.net.Uri) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            val hasPersistablePermission = intent.flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION != 0
+            val hasPersistablePermission = intent.flags and android.content.Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION != 0
             if (hasPersistablePermission) {
-                val takeFlags = intent.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                val takeFlags = intent.flags and (android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                 if (takeFlags != 0) {
                     try {
                         contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     } catch (securityException: SecurityException) {
-                        Log.w("MainActivity", "Unable to persist URI permission for $uri", securityException)
+                        android.util.Log.w("MainActivity", "Unable to persist URI permission for $uri", securityException)
                     } catch (illegalArgumentException: IllegalArgumentException) {
-                        Log.w("MainActivity", "Persistable URI permission not granted for $uri", illegalArgumentException)
+                        android.util.Log.w("MainActivity", "Persistable URI permission not granted for $uri", illegalArgumentException)
                     }
                 }
             }
@@ -338,58 +387,7 @@ class MainActivity : ComponentActivity() {
     private fun clearExternalIntentPayload(intent: Intent) {
         intent.data = null
         intent.clipData = null
-        intent.removeExtra(Intent.EXTRA_STREAM)
-    }
-
-    @OptIn(ExperimentalPermissionsApi::class)
-    @Composable
-    private fun HandlePermissions(mainViewModel: MainViewModel, isBenchmark: Boolean) {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            listOf(Manifest.permission.READ_MEDIA_AUDIO, Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
-        val permissionState = rememberMultiplePermissionsState(permissions = permissions)
-
-        var showAllFilesAccessDialog by remember { mutableStateOf(false) }
-        val needsAllFilesAccess = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                !android.os.Environment.isExternalStorageManager()
-
-        LaunchedEffect(Unit) {
-            if (!permissionState.allPermissionsGranted) {
-                permissionState.launchMultiplePermissionRequest()
-            }
-        }
-
-        if (permissionState.allPermissionsGranted) {
-            LaunchedEffect(Unit) {
-                LogUtils.i(this, "Permissions granted")
-                Log.i("MainActivity", "Permissions granted. Calling mainViewModel.startSync()")
-                mainViewModel.startSync()
-                if (needsAllFilesAccess && !isBenchmark) {
-                    showAllFilesAccessDialog = true
-                }
-            }
-            MainAppContent(playerViewModel, mainViewModel)
-        } else {
-            PermissionsNotGrantedScreen {
-                permissionState.launchMultiplePermissionRequest()
-            }
-        }
-
-        if (showAllFilesAccessDialog) {
-            AllFilesAccessDialog(
-                onDismiss = { showAllFilesAccessDialog = false },
-                onConfirm = {
-                    showAllFilesAccessDialog = false
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-                        intent.data = "package:$packageName".toUri()
-                        requestAllFilesAccessLauncher.launch(intent)
-                    }
-                }
-            )
-        }
+        intent.removeExtra(android.content.Intent.EXTRA_STREAM)
     }
 
     @androidx.annotation.OptIn(UnstableApi::class)
@@ -399,6 +397,7 @@ class MainActivity : ComponentActivity() {
         val navController = rememberNavController()
         val isSyncing by mainViewModel.isSyncing.collectAsState()
         val isLibraryEmpty by mainViewModel.isLibraryEmpty.collectAsState()
+        val hasCompletedInitialSync by mainViewModel.hasCompletedInitialSync.collectAsState()
         val syncProgress by mainViewModel.syncProgress.collectAsState()
         
         // Observe pending shuffle action
@@ -435,7 +434,7 @@ class MainActivity : ComponentActivity() {
                         success = true
                         _pendingPlaylistNavigation.value = null
                     } catch (e: IllegalArgumentException) {
-                        kotlinx.coroutines.delay(100)
+                        delay(100)
                         attempts++
                     }
                 }
@@ -451,7 +450,7 @@ class MainActivity : ComponentActivity() {
         var loadingShownTimestamp by remember { mutableStateOf(0L) }
         val minimumDisplayDuration = 1500L // Show loading for at least 1.5 seconds
 
-        val shouldPotentiallyShowLoading = isSyncing && isLibraryEmpty
+        val shouldPotentiallyShowLoading = isSyncing && isLibraryEmpty && !hasCompletedInitialSync
 
         LaunchedEffect(shouldPotentiallyShowLoading) {
             if (shouldPotentiallyShowLoading) {
@@ -510,6 +509,7 @@ class MainActivity : ComponentActivity() {
                 Screen.Settings.route,
                 Screen.PlaylistDetail.route,
                 Screen.DailyMixScreen.route,
+                Screen.RecentlyPlayed.route,
                 Screen.GenreDetail.route,
                 Screen.AlbumDetail.route,
                 Screen.ArtistDetail.route,
@@ -522,7 +522,9 @@ class MainActivity : ComponentActivity() {
                 Screen.ArtistSettings.route,
                 Screen.Equalizer.route,
                 Screen.SettingsCategory.route,
-                Screen.DelimiterConfig.route
+                Screen.DelimiterConfig.route,
+                Screen.PaletteStyle.route,
+                Screen.RecentlyPlayed.route
             )
         }
         val shouldHideNavigationBar by remember(currentRoute, isSearchBarActive) {
@@ -544,8 +546,22 @@ class MainActivity : ComponentActivity() {
         }
 
         val navBarStyle by playerViewModel.navBarStyle.collectAsState()
+        val hapticsEnabled by playerViewModel.hapticsEnabled.collectAsState()
+        val rootView = LocalView.current
+        val platformHapticFeedback = LocalHapticFeedback.current
+        val appHapticsConfig = remember(hapticsEnabled) {
+            AppHapticsConfig(enabled = hapticsEnabled)
+        }
+        val scopedHapticFeedback = remember(platformHapticFeedback, appHapticsConfig.enabled) {
+            if (appHapticsConfig.enabled) platformHapticFeedback else NoOpHapticFeedback
+        }
 
         val systemNavBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
+        LaunchedEffect(hapticsEnabled, rootView) {
+            rootView.isHapticFeedbackEnabled = hapticsEnabled
+            rootView.rootView?.isHapticFeedbackEnabled = hapticsEnabled
+        }
 
         val horizontalPadding = if (navBarStyle == NavBarStyle.DEFAULT) {
             if (systemNavBarInset > 30.dp) 14.dp else systemNavBarInset
@@ -556,207 +572,253 @@ class MainActivity : ComponentActivity() {
         val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
         val scope = rememberCoroutineScope()
 
-        AppSidebarDrawer(
-            drawerState = drawerState,
-            selectedRoute = currentRoute ?: Screen.Home.route,
-            onDestinationSelected = { destination ->
-                scope.launch { drawerState.close() }
-                when (destination) {
-                    DrawerDestination.Home -> navController.navigate(Screen.Home.route) {
-                        popUpTo(Screen.Home.route) { inclusive = true }
-                    }
-                    DrawerDestination.Equalizer -> navController.navigate(Screen.Equalizer.route)
-                    DrawerDestination.Settings -> navController.navigate(Screen.Settings.route)
-                    DrawerDestination.Telegram -> {
-                        val intent = Intent(this@MainActivity, com.theveloper.pixelplay.presentation.telegram.auth.TelegramLoginActivity::class.java)
-                        startActivity(intent)
-                    }
-                    else -> {}
-                }
-            }
+        CompositionLocalProvider(
+            LocalAppHapticsConfig provides appHapticsConfig,
+            LocalHapticFeedback provides scopedHapticFeedback
         ) {
-            Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            bottomBar = {
-                if (!shouldHideNavigationBar) {
-                    val playerContentExpansionFraction = playerViewModel.playerContentExpansionFraction.value
-                    val showPlayerContentArea = playerViewModel.stablePlayerState.collectAsState().value.currentSong != null
-                    val currentSheetContentState by playerViewModel.sheetState.collectAsState()
-                    val navBarCornerRadius by playerViewModel.navBarCornerRadius.collectAsState()
-                    val navBarElevation = 3.dp
+            AppSidebarDrawer(
+                drawerState = drawerState,
+                selectedRoute = currentRoute ?: Screen.Home.route,
+                onDestinationSelected = { destination ->
+                    scope.launch { drawerState.close() }
+                    when (destination) {
+                        DrawerDestination.Home -> navController.navigate(Screen.Home.route) {
+                            popUpTo(Screen.Home.route) { inclusive = true }
+                        }
+                        DrawerDestination.Equalizer -> navController.navigate(Screen.Equalizer.route)
+                        DrawerDestination.Settings -> navController.navigate(Screen.Settings.route)
+                        DrawerDestination.Telegram -> {
+                            val intent = Intent(this@MainActivity, com.theveloper.pixelplay.presentation.telegram.auth.TelegramLoginActivity::class.java)
+                            startActivity(intent)
+                        }
+                        else -> {}
+                    }
+                }
+        ) {
 
-                    val playerContentActualBottomRadiusTargetValue by remember(
-                        navBarStyle,
-                        showPlayerContentArea,
-                        playerContentExpansionFraction,
-                    ) {
-                        derivedStateOf {
-                            if (navBarStyle == NavBarStyle.FULL_WIDTH) {
-                                return@derivedStateOf lerp(32.dp, 26.dp, playerContentExpansionFraction)
-                            }
+                Scaffold(
+                modifier = Modifier.fillMaxSize(),
+                bottomBar = {
+                    if (!shouldHideNavigationBar) {
+                        val playerContentExpansionFraction = playerViewModel.playerContentExpansionFraction.value
+                        val currentSongId by remember {
+                            playerViewModel.stablePlayerState
+                                .map { it.currentSong?.id }
+                                .distinctUntilChanged()
+                        }.collectAsState(initial = null)
+                        val showPlayerContentArea = currentSongId != null
+                        val navBarCornerRadius by playerViewModel.navBarCornerRadius.collectAsState()
+                        val navBarElevation = 3.dp
 
-                            if (showPlayerContentArea) {
-                                if (playerContentExpansionFraction < 0.2f) {
-                                    lerp(12.dp, 26.dp, (playerContentExpansionFraction / 0.2f).coerceIn(0f, 1f))
-                                } else {
-                                    26.dp
+                        val playerContentActualBottomRadiusTargetValue by remember(
+                            navBarStyle,
+                            showPlayerContentArea,
+                            playerContentExpansionFraction,
+                        ) {
+                            derivedStateOf {
+                                if (navBarStyle == NavBarStyle.FULL_WIDTH) {
+                                    return@derivedStateOf lerp(navBarCornerRadius.dp, 26.dp, playerContentExpansionFraction)
                                 }
-                            } else {
-                                navBarCornerRadius.dp
+
+                                if (showPlayerContentArea) {
+                                    if (playerContentExpansionFraction < 0.2f) {
+                                        lerp(12.dp, 26.dp, (playerContentExpansionFraction / 0.2f).coerceIn(0f, 1f))
+                                    } else {
+                                        26.dp
+                                    }
+                                } else {
+                                    navBarCornerRadius.dp
+                                }
                             }
                         }
-                    }
 
-                    val playerContentActualBottomRadius by animateDpAsState(
-                        targetValue = playerContentActualBottomRadiusTargetValue,
-                        animationSpec = androidx.compose.animation.core.spring(
-                            dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
-                            stiffness = androidx.compose.animation.core.Spring.StiffnessMedium
-                        ),
-                        label = "PlayerContentBottomRadius"
-                    )
-
-                    val navBarHideFraction = if (showPlayerContentArea) playerContentExpansionFraction else 0f
-                    val navBarHideFractionClamped = navBarHideFraction.coerceIn(0f, 1f)
-
-                    val actualShape = remember(playerContentActualBottomRadius, showPlayerContentArea, navBarStyle, navBarCornerRadius) {
-                        val bottomRadius = if (navBarStyle == NavBarStyle.FULL_WIDTH) 0.dp else navBarCornerRadius.dp
-                        AbsoluteSmoothCornerShape(
-                            cornerRadiusTL = playerContentActualBottomRadius,
-                            smoothnessAsPercentBR = 60,
-                            cornerRadiusTR = playerContentActualBottomRadius,
-                            smoothnessAsPercentTL = 60,
-                            cornerRadiusBL = bottomRadius,
-                            smoothnessAsPercentTR = 60,
-                            cornerRadiusBR = bottomRadius,
-                            smoothnessAsPercentBL = 60
+                        val playerContentActualBottomRadius by animateDpAsState(
+                            targetValue = playerContentActualBottomRadiusTargetValue,
+                            animationSpec = androidx.compose.animation.core.spring(
+                                dampingRatio = androidx.compose.animation.core.Spring.DampingRatioNoBouncy,
+                                stiffness = androidx.compose.animation.core.Spring.StiffnessMedium
+                            ),
+                            label = "PlayerContentBottomRadius"
                         )
-                    }
 
-                    val bottomBarPadding = if (navBarStyle == NavBarStyle.FULL_WIDTH) 0.dp else systemNavBarInset
+                        val navBarHideFraction = if (showPlayerContentArea) playerContentExpansionFraction else 0f
+                        val navBarHideFractionClamped = navBarHideFraction.coerceIn(0f, 1f)
 
-                    var componentHeightPx by remember { mutableStateOf(0) }
-                    val density = LocalDensity.current
-                    val shadowOverflowPx = remember(navBarElevation, density) {
-                        with(density) { (navBarElevation * 8).toPx() }
-                    }
-                    val bottomBarPaddingPx = remember(bottomBarPadding, density) {
-                        with(density) { bottomBarPadding.toPx() }
-                    }
-                    val animatedTranslationY by remember(
-                        navBarHideFractionClamped,
-                        componentHeightPx,
-                        shadowOverflowPx,
-                        bottomBarPaddingPx,
-                    ) {
-                        derivedStateOf {
-                            (componentHeightPx + shadowOverflowPx + bottomBarPaddingPx) * navBarHideFractionClamped
+                        val actualShape = remember(playerContentActualBottomRadius, showPlayerContentArea, navBarStyle, navBarCornerRadius) {
+                            val bottomRadius = if (navBarStyle == NavBarStyle.FULL_WIDTH) 0.dp else navBarCornerRadius.dp
+                            AbsoluteSmoothCornerShape(
+                                cornerRadiusTL = playerContentActualBottomRadius,
+                                smoothnessAsPercentBR = 60,
+                                cornerRadiusTR = playerContentActualBottomRadius,
+                                smoothnessAsPercentTL = 60,
+                                cornerRadiusBL = bottomRadius,
+                                smoothnessAsPercentTR = 60,
+                                cornerRadiusBR = bottomRadius,
+                                smoothnessAsPercentBL = 60
+                            )
                         }
-                    }
 
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = bottomBarPadding)
-                            .onSizeChanged { componentHeightPx = it.height }
-                            .graphicsLayer {
-                                translationY = animatedTranslationY
-                                alpha = 1f
+                        val bottomBarPadding = if (navBarStyle == NavBarStyle.FULL_WIDTH) 0.dp else systemNavBarInset
+
+                        var componentHeightPx by remember { mutableStateOf(0) }
+                        val density = LocalDensity.current
+                        val shadowOverflowPx = remember(navBarElevation, density) {
+                            with(density) { (navBarElevation * 8).toPx() }
+                        }
+                        val bottomBarPaddingPx = remember(bottomBarPadding, density) {
+                            with(density) { bottomBarPadding.toPx() }
+                        }
+                        val animatedTranslationY by remember(
+                            navBarHideFractionClamped,
+                            componentHeightPx,
+                            shadowOverflowPx,
+                            bottomBarPaddingPx,
+                        ) {
+                            derivedStateOf {
+                                (componentHeightPx + shadowOverflowPx + bottomBarPaddingPx) * navBarHideFractionClamped
                             }
-                    ) {
-                        val navHeight: Dp = if (navBarStyle == NavBarStyle.DEFAULT) {
-                            NavBarContentHeight
-                        } else {
-                            NavBarContentHeightFullWidth + systemNavBarInset
                         }
 
-                        Surface(
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(navHeight)
-                                .padding(horizontal = horizontalPadding),
-                            color = NavigationBarDefaults.containerColor,
-                            shape = actualShape,
-                            shadowElevation = navBarElevation
+                                .padding(bottom = bottomBarPadding)
+                                .onSizeChanged { componentHeightPx = it.height }
+                                .graphicsLayer {
+                                    translationY = animatedTranslationY
+                                    alpha = 1f
+                                }
                         ) {
-                            PlayerInternalNavigationBar(
+                            val navHeight: Dp = if (navBarStyle == NavBarStyle.DEFAULT) {
+                                NavBarContentHeight
+                            } else {
+                                NavBarContentHeightFullWidth + systemNavBarInset
+                            }
+                            val onSearchIconDoubleTap = remember(playerViewModel) {
+                                { playerViewModel.onSearchNavIconDoubleTapped() }
+                            }
+
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(navHeight)
+                                    .padding(horizontal = horizontalPadding),
+                                color = NavigationBarDefaults.containerColor,
+                                shape = actualShape,
+                                shadowElevation = navBarElevation
+                            ) {
+                                PlayerInternalNavigationBar(
+                                    navController = navController,
+                                    navItems = commonNavItems,
+                                    currentRoute = currentRoute,
+                                    navBarStyle = navBarStyle,
+                                    onSearchIconDoubleTap = onSearchIconDoubleTap,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
+                    }
+                }
+                ) { innerPadding ->
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                        val density = LocalDensity.current
+                        val configuration = LocalWindowInfo.current
+                        val screenHeightPx = remember(configuration) { with(density) { configuration.containerSize.height } }
+                        val containerHeight = this.maxHeight
+
+                        val showPlayerContentInitially by remember {
+                            playerViewModel.stablePlayerState
+                                .map { it.currentSong?.id != null }
+                                .distinctUntilChanged()
+                        }.collectAsState(initial = false)
+                        val usePlayerSheetV2 by userPreferencesRepository.usePlayerSheetV2Flow.collectAsState(initial = false)
+
+                        val routesWithHiddenMiniPlayer = remember { setOf(Screen.NavBarCrRad.route) }
+                        val shouldHideMiniPlayer by remember(currentRoute) {
+                            derivedStateOf { currentRoute in routesWithHiddenMiniPlayer }
+                        }
+
+                        val miniPlayerH = with(density) { MiniPlayerHeight.toPx() }
+                        val totalSheetHeightWhenContentCollapsedPx = if (showPlayerContentInitially && !shouldHideMiniPlayer) miniPlayerH else 0f
+
+                        val bottomMargin = innerPadding.calculateBottomPadding()
+
+                        val spacerPx = with(density) { MiniPlayerBottomSpacer.toPx() }
+                        val sheetCollapsedTargetY = screenHeightPx - totalSheetHeightWhenContentCollapsedPx - with(density){ bottomMargin.toPx() } - spacerPx
+
+                        AppNavigation(
+                            playerViewModel = playerViewModel,
+                            navController = navController,
+                            paddingValues = innerPadding,
+                            userPreferencesRepository = userPreferencesRepository,
+                            onSearchBarActiveChange = { isSearchBarActive = it },
+                            onOpenSidebar = { scope.launch { drawerState.open() } }
+                        )
+
+                        if (usePlayerSheetV2) {
+                            UnifiedPlayerSheetV2(
+                                playerViewModel = playerViewModel,
+                                sheetCollapsedTargetY = sheetCollapsedTargetY,
+                                collapsedStateHorizontalPadding = horizontalPadding,
+                                hideMiniPlayer = shouldHideMiniPlayer,
+                                containerHeight = containerHeight,
                                 navController = navController,
-                                navItems = commonNavItems,
-                                currentRoute = currentRoute,
-                                navBarStyle = navBarStyle,
-                                modifier = Modifier.fillMaxSize()
+                                isNavBarHidden = shouldHideNavigationBar
+                            )
+                        } else {
+                            UnifiedPlayerSheet(
+                                playerViewModel = playerViewModel,
+                                sheetCollapsedTargetY = sheetCollapsedTargetY,
+                                collapsedStateHorizontalPadding = horizontalPadding,
+                                hideMiniPlayer = shouldHideMiniPlayer,
+                                containerHeight = containerHeight,
+                                navController = navController,
+                                isNavBarHidden = shouldHideNavigationBar
+                            )
+                        }
+
+                        val dismissUndoBarSlice by remember {
+                            playerViewModel.playerUiState
+                                .map { state ->
+                                    DismissUndoBarSlice(
+                                        isVisible = state.showDismissUndoBar,
+                                        durationMillis = state.undoBarVisibleDuration
+                                    )
+                                }
+                                .distinctUntilChanged()
+                        }.collectAsState(initial = DismissUndoBarSlice())
+                        val onUndoDismissPlaylist = remember(playerViewModel) {
+                            { playerViewModel.undoDismissPlaylist() }
+                        }
+                        val onCloseDismissUndoBar = remember(playerViewModel) {
+                            { playerViewModel.hideDismissUndoBar() }
+                        }
+
+                        AnimatedVisibility(
+                            visible = dismissUndoBarSlice.isVisible,
+                            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+                            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = innerPadding.calculateBottomPadding() + MiniPlayerBottomSpacer)
+                                .padding(horizontal = horizontalPadding)
+                        ) {
+                            DismissUndoBar(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(MiniPlayerHeight)
+                                    .padding(horizontal = 14.dp),
+                                onUndo = onUndoDismissPlaylist,
+                                onClose = onCloseDismissUndoBar,
+                                durationMillis = dismissUndoBarSlice.durationMillis
                             )
                         }
                     }
                 }
             }
-        ) { innerPadding ->
-            BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                val density = LocalDensity.current
-                val configuration = LocalWindowInfo.current
-                val screenHeightPx = remember(configuration) { with(density) { configuration.containerSize.height } }
-                val containerHeight = this.maxHeight
-
-                val stablePlayerState by playerViewModel.stablePlayerState.collectAsState()
-                val showPlayerContentInitially = stablePlayerState.currentSong != null
-
-                val routesWithHiddenMiniPlayer = remember { setOf(Screen.NavBarCrRad.route) }
-                val shouldHideMiniPlayer by remember(currentRoute) {
-                    derivedStateOf { currentRoute in routesWithHiddenMiniPlayer }
-                }
-
-                val miniPlayerH = with(density) { MiniPlayerHeight.toPx() }
-                val totalSheetHeightWhenContentCollapsedPx = if (showPlayerContentInitially && !shouldHideMiniPlayer) miniPlayerH else 0f
-
-                val bottomMargin = innerPadding.calculateBottomPadding()
-
-                val spacerPx = with(density) { MiniPlayerBottomSpacer.toPx() }
-                val sheetCollapsedTargetY = screenHeightPx - totalSheetHeightWhenContentCollapsedPx - with(density){ bottomMargin.toPx() } - spacerPx
-
-                AppNavigation(
-                    playerViewModel = playerViewModel,
-                    navController = navController,
-                    paddingValues = innerPadding,
-                    userPreferencesRepository = userPreferencesRepository,
-                    onSearchBarActiveChange = { isSearchBarActive = it },
-                    onOpenSidebar = { scope.launch { drawerState.open() } }
-                )
-
-                UnifiedPlayerSheet(
-                    playerViewModel = playerViewModel,
-                    sheetCollapsedTargetY = sheetCollapsedTargetY,
-                    collapsedStateHorizontalPadding = horizontalPadding,
-                    hideMiniPlayer = shouldHideMiniPlayer,
-                    containerHeight = containerHeight,
-                    navController = navController,
-                    isNavBarHidden = shouldHideNavigationBar
-                )
-
-                val playerUiState by playerViewModel.playerUiState.collectAsState()
-
-                AnimatedVisibility(
-                    visible = playerUiState.showDismissUndoBar,
-                    enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-                    exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = innerPadding.calculateBottomPadding() + MiniPlayerBottomSpacer)
-                        .padding(horizontal = horizontalPadding)
-                ) {
-                    DismissUndoBar(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(MiniPlayerHeight)
-                            .padding(horizontal = 14.dp),
-                        onUndo = { playerViewModel.undoDismissPlaylist() },
-                        onClose = { playerViewModel.hideDismissUndoBar() },
-                        durationMillis = playerUiState.undoBarVisibleDuration
-                    )
-                }
-            }
         }
-    }
-    Trace.endSection()
+
+        Trace.endSection()
     }
 
     @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -808,34 +870,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Composable
-    fun PermissionsNotGrantedScreen(onRequestPermissions: () -> Unit) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = "Permission Required",
-                style = MaterialTheme.typography.headlineSmall,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "PixelPlayer needs access to your audio files to scan and play your music. Please grant permission to continue.",
-                style = MaterialTheme.typography.bodyLarge,
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = onRequestPermissions) {
-                Text("Grant Permission")
-            }
-        }
-    }
-
 
     @androidx.annotation.OptIn(UnstableApi::class)
     override fun onStart() {
@@ -844,7 +878,7 @@ class MainActivity : ComponentActivity() {
         playerViewModel.onMainActivityStart()
 
         if (intent.getBooleanExtra("is_benchmark", false)) {
-            playerViewModel.loadDummyDataForBenchmark()
+            // Benchmark mode no longer loads dummy data - uses real library data instead
         }
 
         val sessionToken = SessionToken(this, ComponentName(this, MusicService::class.java))
@@ -863,7 +897,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        syncManager.sync()
     }
 
 

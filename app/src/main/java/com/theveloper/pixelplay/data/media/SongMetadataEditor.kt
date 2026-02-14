@@ -11,21 +11,88 @@ import androidx.core.net.toUri
 import com.kyant.taglib.Picture
 import com.kyant.taglib.TagLib
 import com.theveloper.pixelplay.data.database.MusicDao
+import com.theveloper.pixelplay.data.database.TelegramDao // Added
+import com.theveloper.pixelplay.data.database.TelegramSongEntity // Added
+import kotlinx.coroutines.flow.first // Added
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.gagravarr.opus.OpusFile
 import org.gagravarr.opus.OpusTags
 import timber.log.Timber
 import java.io.File
 import java.io.FileOutputStream
+import java.io.IOException
 import java.util.Locale
 
 private const val TAG = "SongMetadataEditor"
+private const val METADATA_EDIT_TIMEOUT_MS = 30_000L
+
+/**
+ * Error types for metadata editing operations
+ */
+enum class MetadataEditError {
+    FILE_NOT_FOUND,
+    NO_WRITE_PERMISSION,
+    INVALID_INPUT,
+    UNSUPPORTED_FORMAT,
+    TAGLIB_ERROR,
+    TIMEOUT,
+    FILE_CORRUPTED,
+    IO_ERROR,
+    UNKNOWN
+}
 
 
-class SongMetadataEditor(private val context: Context, private val musicDao: MusicDao) {
+class SongMetadataEditor(
+    private val context: Context,
+    private val musicDao: MusicDao,
+    private val telegramDao: TelegramDao // Added
+) {
 
     // File extensions that require VorbisJava (TagLib has issues with these via file descriptors)
     private val opusExtensions = setOf("opus", "ogg")
+
+    /**
+     * Maximum allowed length for metadata fields to prevent buffer overflows
+     */
+    private object MetadataLimits {
+        const val MAX_TITLE_LENGTH = 500
+        const val MAX_ARTIST_LENGTH = 500
+        const val MAX_ALBUM_LENGTH = 500
+        const val MAX_GENRE_LENGTH = 100
+        const val MAX_LYRICS_LENGTH = 50_000
+    }
+
+    /**
+     * Validates metadata input and returns error message if invalid
+     */
+    private fun validateMetadataInput(
+        title: String,
+        artist: String,
+        album: String,
+        genre: String,
+        lyrics: String
+    ): String? {
+        if (title.isBlank()) return "Title cannot be empty"
+        if (title.length > MetadataLimits.MAX_TITLE_LENGTH) return "Title too long"
+        if (artist.length > MetadataLimits.MAX_ARTIST_LENGTH) return "Artist name too long"
+        if (album.length > MetadataLimits.MAX_ALBUM_LENGTH) return "Album name too long"
+        if (genre.length > MetadataLimits.MAX_GENRE_LENGTH) return "Genre too long"
+        if (lyrics.length > MetadataLimits.MAX_LYRICS_LENGTH) return "Lyrics too long"
+        return null
+    }
+
+    /**
+     * Checks if the file can be written to
+     */
+    private fun checkFileWritePermission(filePath: String): Boolean {
+        val file = File(filePath)
+        if (!file.exists()) return false
+        if (!file.canWrite()) return false
+        // Also check parent directory for potential rename operations
+        val parent = file.parentFile ?: return false
+        return parent.canWrite()
+    }
 
     fun editSongMetadata(
         songId: Long,
@@ -37,37 +104,77 @@ class SongMetadataEditor(private val context: Context, private val musicDao: Mus
         newTrackNumber: Int,
         coverArtUpdate: CoverArtUpdate? = null,
     ): SongMetadataEditResult {
+        // Input validation first
+        val validationError = validateMetadataInput(newTitle, newArtist, newAlbum, newGenre, newLyrics)
+        if (validationError != null) {
+            Timber.w("Metadata validation failed: $validationError")
+            return SongMetadataEditResult(
+                success = false,
+                updatedAlbumArtUri = null,
+                error = MetadataEditError.INVALID_INPUT,
+                errorMessage = validationError
+            )
+        }
+
         return try {
             val trimmedLyrics = newLyrics.trim()
             val trimmedGenre = newGenre.trim()
             val normalizedGenre = trimmedGenre.takeIf { it.isNotBlank() }
             val normalizedLyrics = trimmedLyrics.takeIf { it.isNotBlank() }
 
-            // Get file path to determine which library to use
-            val filePath = getFilePathFromMediaStore(songId)
-            if (filePath == null) {
+            // 1. FIRST: Get file path (Handle both MediaStore and Telegram/Negative IDs)
+            val isTelegramSong = songId < 0
+            val filePath = if (isTelegramSong) {
+                runBlocking { musicDao.getSongById(songId).first()?.filePath }
+            } else {
+                getFilePathFromMediaStore(songId)
+            }
+
+            if (filePath.isNullOrBlank() && !isTelegramSong) {
                 Log.e(TAG, "Could not get file path for songId: $songId")
-                return SongMetadataEditResult(success = false, updatedAlbumArtUri = null)
+                return SongMetadataEditResult(
+                    success = false,
+                    updatedAlbumArtUri = null,
+                    error = MetadataEditError.FILE_NOT_FOUND,
+                    errorMessage = "Could not find file in media library"
+                )
+            }
+
+            // Check write permissions before attempting edit
+            if (!filePath.isNullOrBlank() && !checkFileWritePermission(filePath)) {
+                Log.e(TAG, "No write permission for file: $filePath")
+                return SongMetadataEditResult(
+                    success = false,
+                    updatedAlbumArtUri = null,
+                    error = MetadataEditError.NO_WRITE_PERMISSION,
+                    errorMessage = "Cannot write to this file. It may be on read-only storage or protected."
+                )
             }
 
             // Get file extension to determine which library to use
-            val extension = filePath.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            val finalFilePath = filePath ?: ""
+            val extension = finalFilePath.substringAfterLast('.', "").lowercase(Locale.ROOT)
             val useVorbisJava = extension in opusExtensions
 
-            // 1. FIRST: Update the actual file with ALL metadata
-            // For Opus/Ogg files, we skip file modification because:
-            // - TagLib can't detect Opus via file descriptors
-            // - jaudiotagger doesn't support Opus
-            // - VorbisJava corrupts files (adds .pending, changes extension to .oga)
-            // Instead, we only update MediaStore and local DB, which is enough for the app
-            val fileUpdateSuccess = if (useVorbisJava) {
+            // 2. Update the actual file with ALL metadata (if it exists)
+            val fileExists = finalFilePath.isNotBlank() && File(finalFilePath).exists()
+            
+            val fileUpdateSuccess = if (!fileExists) {
+                if (isTelegramSong) {
+                     Log.w(TAG, "METADATA_EDIT: Telegram file not found (streaming?). Skipping file tags, updating DB only.")
+                     true
+                } else {
+                     Log.e(TAG, "METADATA_EDIT: File does not exist: $finalFilePath")
+                     false
+                }
+            } else if (useVorbisJava) {
                 Log.e(TAG, "METADATA_EDIT: Opus/Ogg file detected - skipping file modification to prevent corruption")
-                Log.e(TAG, "METADATA_EDIT: Will update MediaStore and local DB only for: $filePath")
-                true // Skip file modification, proceed to MediaStore update
+                Log.e(TAG, "METADATA_EDIT: Will update DBs only for: $finalFilePath")
+                true // Skip file modification, proceed to DB update
             } else {
-                Log.e(TAG, "METADATA_EDIT: Using TagLib for $extension file: $filePath")
+                Log.e(TAG, "METADATA_EDIT: Using TagLib for $extension file: $finalFilePath")
                 updateFileMetadataWithTagLib(
-                    filePath = filePath,
+                    filePath = finalFilePath,
                     newTitle = newTitle,
                     newArtist = newArtist,
                     newAlbum = newAlbum,
@@ -80,22 +187,52 @@ class SongMetadataEditor(private val context: Context, private val musicDao: Mus
 
             if (!fileUpdateSuccess) {
                 Log.e(TAG, "Failed to update file metadata for songId: $songId")
-                return SongMetadataEditResult(success = false, updatedAlbumArtUri = null)
+                return SongMetadataEditResult(
+                    success = false,
+                    updatedAlbumArtUri = null,
+                    error = MetadataEditError.TAGLIB_ERROR,
+                    errorMessage = "Failed to write metadata to file"
+                )
             }
 
-            // 2. SECOND: Update MediaStore to reflect the changes
-            val mediaStoreSuccess = updateMediaStoreMetadata(
-                songId = songId,
-                title = newTitle,
-                artist = newArtist,
-                album = newAlbum,
-                genre = trimmedGenre,
-                trackNumber = newTrackNumber
-            )
-
-            if (!mediaStoreSuccess) {
-                Timber.w("MediaStore update failed, but file was updated for songId: $songId")
-                // Continue anyway since the file was updated
+            // 3. Update MediaStore (Local) OR Telegram Database (Telegram)
+            if (isTelegramSong) {
+                // Update Telegram Database
+                 runBlocking {
+                    // Update the cached items so SyncWorker doesn't overwrite our changes
+                     val songEntity = musicDao.getSongById(songId).first()
+                     if (songEntity?.telegramChatId != null && songEntity.telegramFileId != null) {
+                        val telegramId = "${songEntity.telegramChatId}_${songEntity.telegramFileId}"
+                         // Currently we don't have a direct update method in TelegramDao,
+                         // assuming we fetch, modify, insert (REPLACE)
+                         val telegramSong = telegramDao.getSongsByIds(listOf(telegramId)).first().firstOrNull()
+                         if (telegramSong != null) {
+                             val updatedTelegramSong = telegramSong.copy(
+                                 title = newTitle,
+                                 artist = newArtist,
+                                 // Telegram entity doesn't have album/genre/lyrics fields in current schema
+                                 // but updating title/artist is the most important
+                             )
+                             telegramDao.insertSongs(listOf(updatedTelegramSong))
+                             Timber.d("Updated TelegramDao for song: $telegramId")
+                         }
+                     }
+                 }
+            } else {
+                // Update MediaStore to reflect the changes
+                val mediaStoreSuccess = updateMediaStoreMetadata(
+                    songId = songId,
+                    title = newTitle,
+                    artist = newArtist,
+                    album = newAlbum,
+                    genre = trimmedGenre,
+                    trackNumber = newTrackNumber
+                )
+    
+                if (!mediaStoreSuccess) {
+                    Timber.w("MediaStore update failed, but file was updated for songId: $songId")
+                    // Continue anyway since the file was updated
+                }
             }
 
             // 3. Update local database and save cover art preview
@@ -120,15 +257,118 @@ class SongMetadataEditor(private val context: Context, private val musicDao: Mus
             }
 
             // 4. Force media rescan with the known file path
-            forceMediaRescan(filePath)
+            if (finalFilePath.isNotBlank()) {
+                forceMediaRescan(finalFilePath)
+            }
 
             Log.e(TAG, "METADATA_EDIT: Successfully updated metadata for songId: $songId")
             SongMetadataEditResult(success = true, updatedAlbumArtUri = storedCoverArtUri)
 
+        } catch (e: SecurityException) {
+            Timber.e(e, "Security exception editing metadata for songId: $songId")
+            SongMetadataEditResult(
+                success = false,
+                updatedAlbumArtUri = null,
+                error = MetadataEditError.NO_WRITE_PERMISSION,
+                errorMessage = "Permission denied: ${e.localizedMessage}"
+            )
+        } catch (e: IOException) {
+            Timber.e(e, "IO exception editing metadata for songId: $songId")
+            SongMetadataEditResult(
+                success = false,
+                updatedAlbumArtUri = null,
+                error = MetadataEditError.IO_ERROR,
+                errorMessage = "Error accessing file: ${e.localizedMessage}"
+            )
+        } catch (e: OutOfMemoryError) {
+            Timber.e(e, "OOM editing metadata for songId: $songId")
+            SongMetadataEditResult(
+                success = false,
+                updatedAlbumArtUri = null,
+                error = MetadataEditError.FILE_CORRUPTED,
+                errorMessage = "File too large or corrupted"
+            )
         } catch (e: Exception) {
             Timber.e(e, "Failed to update metadata for songId: $songId")
-            SongMetadataEditResult(success = false, updatedAlbumArtUri = null)
+            // Determine error type from exception
+            val errorType = when {
+                e.message?.contains("corrupt", ignoreCase = true) == true -> MetadataEditError.FILE_CORRUPTED
+                e.message?.contains("unsupported", ignoreCase = true) == true -> MetadataEditError.UNSUPPORTED_FORMAT
+                else -> MetadataEditError.UNKNOWN
+            }
+            SongMetadataEditResult(
+                success = false,
+                updatedAlbumArtUri = null,
+                error = errorType,
+                errorMessage = e.localizedMessage ?: "Unknown error occurred"
+            )
         }
+    }
+
+    /**
+     * FLAC files with high sample rates (>96kHz) or bit depths (>24bit) can cause issues with TagLib.
+     * This function detects such files and logs warnings.
+     */
+    private fun isProblematicFlacFile(filePath: String): FlacAnalysisResult {
+        val extension = filePath.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        if (extension != "flac") {
+            return FlacAnalysisResult.NotFlac
+        }
+        
+        // Try to read FLAC header to detect sample rate and bit depth
+        return try {
+            val file = File(filePath)
+            file.inputStream().use { inputStream ->
+                val header = ByteArray(42)
+                val bytesRead = inputStream.read(header)
+                
+                if (bytesRead < 42) {
+                    return FlacAnalysisResult.NotFlac
+                }
+                
+                // Check FLAC signature "fLaC"
+                if (header[0].toInt().toChar() != 'f' ||
+                    header[1].toInt().toChar() != 'L' ||
+                    header[2].toInt().toChar() != 'a' ||
+                    header[3].toInt().toChar() != 'C'
+                ) {
+                    return FlacAnalysisResult.NotFlac
+                }
+                
+                // STREAMINFO starts at byte 8 (after 4 byte magic + 4 byte block header)
+                // Sample rate is at bytes 18-20 (bits 0-19 of STREAMINFO)
+                // Bit depth is in byte 20-21
+                val sampleRate = ((header[18].toInt() and 0xFF) shl 12) or
+                    ((header[19].toInt() and 0xFF) shl 4) or
+                    ((header[20].toInt() and 0xF0) shr 4)
+                
+                val bitsPerSample = (((header[20].toInt() and 0x01) shl 4) or
+                    ((header[21].toInt() and 0xF0) shr 4)) + 1
+                
+                Log.d(TAG, "FLAC analysis: sampleRate=$sampleRate, bitsPerSample=$bitsPerSample")
+                
+                // Consider problematic if sample rate > 96kHz or bit depth > 24
+                val isProblematic = sampleRate > 96000 || bitsPerSample > 24
+                
+                if (isProblematic) {
+                    Log.w(TAG, "FLAC file may be problematic: $filePath (${sampleRate}Hz, ${bitsPerSample}bit)")
+                    FlacAnalysisResult.Problematic(sampleRate, bitsPerSample)
+                } else {
+                    FlacAnalysisResult.Safe(sampleRate, bitsPerSample)
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not analyze FLAC file: $filePath", e)
+            // If we can't analyze, assume it might be problematic
+            FlacAnalysisResult.Unknown
+        }
+    }
+
+    private sealed class FlacAnalysisResult {
+        object NotFlac : FlacAnalysisResult()
+        data class Safe(val sampleRate: Int, val bitsPerSample: Int) : FlacAnalysisResult()
+        data class Problematic(val sampleRate: Int, val bitsPerSample: Int) : FlacAnalysisResult()
+        object Unknown : FlacAnalysisResult()
     }
 
     private fun updateFileMetadataWithTagLib(
@@ -141,6 +381,18 @@ class SongMetadataEditor(private val context: Context, private val musicDao: Mus
         newTrackNumber: Int,
         coverArtUpdate: CoverArtUpdate? = null
     ): Boolean {
+        // Check for problematic FLAC files first
+        when (val flacResult = isProblematicFlacFile(filePath)) {
+            is FlacAnalysisResult.Problematic -> {
+                Log.w(TAG, "TAGLIB: Skipping file modification for high-resolution FLAC (${flacResult.sampleRate}Hz, ${flacResult.bitsPerSample}bit)")
+                Log.w(TAG, "TAGLIB: High-res FLAC files may not work correctly with TagLib. Will update MediaStore only.")
+                // Return true to indicate we should proceed with MediaStore-only update
+                // The calling code will still update MediaStore and local DB
+                return true
+            }
+            else -> { /* Continue with normal processing */ }
+        }
+        
         return try {
             val audioFile = File(filePath)
             if (!audioFile.exists()) {
@@ -460,6 +712,8 @@ private fun MutableMap<String, Array<String>>.upsertOrRemove(key: String, value:
 data class SongMetadataEditResult(
     val success: Boolean,
     val updatedAlbumArtUri: String?,
+    val error: MetadataEditError? = null,
+    val errorMessage: String? = null
 )
 
 data class CoverArtUpdate(

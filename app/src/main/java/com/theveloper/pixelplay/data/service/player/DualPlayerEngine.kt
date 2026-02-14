@@ -32,8 +32,10 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.asStateFlow // Added
+import kotlinx.coroutines.suspendCancellableCoroutine
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.resume
 
 import com.theveloper.pixelplay.data.telegram.TelegramRepository
 import androidx.media3.datasource.ResolvingDataSource
@@ -62,8 +64,8 @@ class DualPlayerEngine @Inject constructor(
     private var transitionJob: Job? = null
     private var transitionRunning = false
 
-    private var playerA: ExoPlayer
-    private var playerB: ExoPlayer
+    private lateinit var playerA: ExoPlayer
+    private lateinit var playerB: ExoPlayer
 
     private val onPlayerSwappedListeners = mutableListOf<(Player) -> Unit>()
     
@@ -118,12 +120,19 @@ class DualPlayerEngine @Inject constructor(
             // Track Telegram file for cache management
             val uri = mediaItem?.localConfiguration?.uri
             if (uri?.scheme == "telegram") {
-                val fileId = uri.host?.toIntOrNull()
-                telegramCacheManager.setActivePlayback(fileId)
-                Timber.tag("DualPlayerEngine").d("Telegram playback active: fileId=$fileId")
+                scope.launch {
+                    val result = telegramRepository.resolveTelegramUri(uri.toString())
+                    val fileId = result?.first
+                    telegramCacheManager.setActivePlayback(fileId)
+                    Timber.tag("DualPlayerEngine").d("Telegram playback active: fileId=$fileId")
+                }
+                // Telegram streaming needs Network Lock to prevent buffering/stuttering
+                (playerA as? ExoPlayer)?.setWakeMode(C.WAKE_MODE_LOCAL)
             } else {
                 // Non-Telegram song - clean up any previous Telegram file
                 telegramCacheManager.setActivePlayback(null)
+                // Local files don't need Wifi Lock - save battery/heat
+                 (playerA as? ExoPlayer)?.setWakeMode(C.WAKE_MODE_LOCAL)
             }
 
             // --- Pre-Resolve Next/Prev Tracks for Performance ---
@@ -179,7 +188,23 @@ class DualPlayerEngine @Inject constructor(
      */
     fun getAudioSessionId(): Int = playerA.audioSessionId
 
+    private var isReleased = false
+
     init {
+        initialize()
+    }
+
+    fun initialize() {
+        if (!isReleased && ::playerA.isInitialized && playerA.applicationLooper.thread.isAlive) return
+
+        // Clean up if needed (though unlikely to be called if already initialized and alive)
+        if (::playerA.isInitialized) {
+            try { playerA.release() } catch (e: Exception) { /* Ignore */ }
+        }
+        if (::playerB.isInitialized) {
+            try { playerB.release() } catch (e: Exception) { /* Ignore */ }
+        }
+
         // We initialize BOTH players with NO internal focus handling.
         // We manage Audio Focus manually via AudioFocusManager.
         playerA = buildPlayer(handleAudioFocus = false)
@@ -187,9 +212,11 @@ class DualPlayerEngine @Inject constructor(
 
         // Attach listener to initial master
         playerA.addListener(masterPlayerListener)
-        
+
         // Initialize active session ID
         _activeAudioSessionId.value = playerA.audioSessionId
+        
+        isReleased = false
     }
 
     private fun requestAudioFocus() {
@@ -233,13 +260,23 @@ class DualPlayerEngine @Inject constructor(
                 eventListener: AudioRendererEventListener,
                 out: ArrayList<Renderer>
             ) {
+                // Use provided sink or create one with Float output enabled
+                // Note: We use the provided audioSink if it works, but here we want to enforce config.
+                // Since super.buildAudioRenderers takes the sink, we can just pass our configured one.
+                // But wait, the parameter 'audioSink' is passed IN. 
+                // We should probably ignore the passed one if we want to enforce ours, OR configure ours and pass it to super.
+                
+                val sink = androidx.media3.exoplayer.audio.DefaultAudioSink.Builder()
+                    .setEnableFloatOutput(false) // Disable Float output to fix CCodec/Hardware errors on some devices
+                    .build()
+
                 out.add(object : MediaCodecAudioRenderer(
                     context,
                     mediaCodecSelector,
                     enableDecoderFallback,
                     eventHandler,
                     eventListener,
-                    audioSink
+                    sink
                 ) {
                     override fun getCodecMaxInputSize(
                         codecInfo: MediaCodecInfo,
@@ -251,9 +288,10 @@ class DualPlayerEngine @Inject constructor(
                     }
                 })
 
-                super.buildAudioRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback, audioSink, eventHandler, eventListener, out)
+                super.buildAudioRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback, sink, eventHandler, eventListener, out)
             }
-        }.setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+        }.setEnableAudioFloatOutput(false) // Disable Float output helper
+         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
 
         val audioAttributes = AudioAttributes.Builder()
             .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
@@ -325,21 +363,24 @@ class DualPlayerEngine @Inject constructor(
         val dataSourceFactory = DefaultDataSource.Factory(context)
         val resolvingFactory = ResolvingDataSource.Factory(dataSourceFactory, resolver)
 
-//        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
-//            .setBufferDurationsMs(
-//                30_000, // Min buffer 30s
-//                60_000, // Max buffer 60s
-//                5_000,  // Buffer for playback start (Aggressive: 5s)
-//                10_000  // Buffer for rebuffer (Aggressive: 10s)
-//            )
-//            .build()
+        // Tune LoadControl to prevent "loop of death" (underrun -> start -> underrun)
+        // Increase bufferForPlaybackMs to wait for more data before starting/resuming.
+        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                30_000, // Min buffer 30s
+                60_000, // Max buffer 60s
+                5_000,  // Buffer for playback start (Increased from 2.5s for stability)
+                5_000   // Buffer for rebuffer (Increased to 5s to stop rapid cycling)
+            )
+            .build()
 
         return ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(DefaultMediaSourceFactory(resolvingFactory))
+            .setLoadControl(loadControl)
             .build().apply {
             setAudioAttributes(audioAttributes, handleAudioFocus)
             setHandleAudioBecomingNoisy(handleAudioFocus)
-            setWakeMode(C.WAKE_MODE_NETWORK) // Prevent WiFi/CPU from sleeping during streaming
+            setWakeMode(C.WAKE_MODE_LOCAL) // Use CPU lock only. WiFi lock unused as we proxy via localhost. Saves battery.
             // Explicitly keep both players live so they can overlap without affecting each other
             playWhenReady = false
         }
@@ -363,6 +404,15 @@ class DualPlayerEngine @Inject constructor(
             playerB.clearMediaItems()
             playerB.playWhenReady = false
             playerB.setMediaItem(mediaItem)
+            
+            // Set appropriate WakeMode for the next item
+            val scheme = mediaItem.localConfiguration?.uri?.scheme
+            if (scheme == "telegram" || scheme == "http" || scheme == "https") {
+                 playerB.setWakeMode(C.WAKE_MODE_LOCAL)
+            } else {
+                 playerB.setWakeMode(C.WAKE_MODE_LOCAL)
+            }
+            
             playerB.prepare()
             playerB.volume = 0f // Start silent
             if (startPositionMs > 0) {
@@ -432,15 +482,16 @@ class DualPlayerEngine @Inject constructor(
             playerB.prepare()
         }
 
-        // Wait until READY (or until it is clearly failing) to guarantee instant start
-        var readinessChecks = 0
-        while (playerB.playbackState == Player.STATE_BUFFERING && readinessChecks < 120) {
-            Timber.tag("TransitionDebug").v("Waiting for Player B to buffer (state=%d)", playerB.playbackState)
-            delay(25)
-            readinessChecks++
-        }
-
-        if (playerB.playbackState != Player.STATE_READY) {
+        // Wait until READY using a listener instead of polling to save CPU
+        if (playerB.playbackState == Player.STATE_BUFFERING) {
+            val ready = awaitPlayerReady(playerB, timeoutMs = 3000L)
+            if (!ready) {
+                Timber.tag("TransitionDebug").w("Player B not ready for overlap. State=%d", playerB.playbackState)
+                playerA.volume = 1f
+                setPauseAtEndOfMediaItems(false)
+                return
+            }
+        } else if (playerB.playbackState != Player.STATE_READY) {
             Timber.tag("TransitionDebug").w("Player B not ready for overlap. State=%d", playerB.playbackState)
             playerA.volume = 1f
             setPauseAtEndOfMediaItems(false)
@@ -463,18 +514,14 @@ class DualPlayerEngine @Inject constructor(
         Timber.tag("TransitionDebug").d("Player B started for overlap. Playing=%s state=%d", playerB.isPlaying, playerB.playbackState)
 
         // Ensure Player B is actually outputting audio before we begin the fade
-        var playChecks = 0
-        while (!playerB.isPlaying && playChecks < 80) {
-            Timber.tag("TransitionDebug").v("Waiting for Player B to start rendering audio (state=%d)", playerB.playbackState)
-            delay(25)
-            playChecks++
-        }
-
         if (!playerB.isPlaying) {
-            Timber.tag("TransitionDebug").e("Player B failed to start in time. Aborting crossfade.")
-            playerA.volume = 1f
-            setPauseAtEndOfMediaItems(false)
-            return
+            val playing = awaitPlayerPlaying(playerB, timeoutMs = 2000L)
+            if (!playing) {
+                Timber.tag("TransitionDebug").e("Player B failed to start in time. Aborting crossfade.")
+                playerA.volume = 1f
+                setPauseAtEndOfMediaItems(false)
+                return
+            }
         }
 
         // Small warmup to guarantee audible overlap
@@ -605,11 +652,82 @@ class DualPlayerEngine @Inject constructor(
     }
 
     /**
+     * Suspends until the player reaches STATE_READY, or until [timeoutMs] elapses.
+     * Uses a Player.Listener callback instead of polling to avoid CPU burn.
+     */
+    private suspend fun awaitPlayerReady(player: ExoPlayer, timeoutMs: Long): Boolean {
+        // Fast path: already ready
+        if (player.playbackState == Player.STATE_READY) return true
+        if (player.playbackState == Player.STATE_IDLE || player.playbackState == Player.STATE_ENDED) return false
+
+        return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine { cont ->
+                val listener = object : Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        if (playbackState != Player.STATE_BUFFERING) {
+                            player.removeListener(this)
+                            if (cont.isActive) cont.resume(playbackState == Player.STATE_READY)
+                        }
+                    }
+                }
+                player.addListener(listener)
+                cont.invokeOnCancellation { player.removeListener(listener) }
+                // Re-check after attaching listener to avoid race
+                if (player.playbackState != Player.STATE_BUFFERING) {
+                    player.removeListener(listener)
+                    if (cont.isActive) cont.resume(player.playbackState == Player.STATE_READY)
+                }
+            }
+        } ?: false
+    }
+
+    /**
+     * Suspends until the player reports isPlaying == true, or until [timeoutMs] elapses.
+     * Uses a Player.Listener callback instead of polling to avoid CPU burn.
+     */
+    private suspend fun awaitPlayerPlaying(player: ExoPlayer, timeoutMs: Long): Boolean {
+        if (player.isPlaying) return true
+
+        return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            suspendCancellableCoroutine { cont ->
+                val listener = object : Player.Listener {
+                    override fun onIsPlayingChanged(isPlaying: Boolean) {
+                        if (isPlaying) {
+                            player.removeListener(this)
+                            if (cont.isActive) cont.resume(true)
+                        }
+                    }
+
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        // If player reaches ENDED or IDLE, it will never start playing
+                        if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) {
+                            player.removeListener(this)
+                            if (cont.isActive) cont.resume(false)
+                        }
+                    }
+                }
+                player.addListener(listener)
+                cont.invokeOnCancellation { player.removeListener(listener) }
+                // Re-check after attaching listener to avoid race
+                if (player.isPlaying) {
+                    player.removeListener(listener)
+                    if (cont.isActive) cont.resume(true)
+                }
+            }
+        } ?: false
+    }
+
+    /**
      * Cleans up resources when the engine is no longer needed.
      */
     fun release() {
         transitionJob?.cancel()
-        playerA.release()
-        playerB.release()
+        abandonAudioFocus()
+        if (::playerA.isInitialized) {
+            playerA.removeListener(masterPlayerListener)
+            playerA.release()
+        }
+        if (::playerB.isInitialized) playerB.release()
+        isReleased = true
     }
 }

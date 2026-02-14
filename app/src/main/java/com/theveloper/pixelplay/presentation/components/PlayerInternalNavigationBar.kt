@@ -1,5 +1,10 @@
 package com.theveloper.pixelplay.presentation.components
 
+import android.os.SystemClock
+import androidx.compose.foundation.background
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -12,6 +17,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -20,7 +28,10 @@ import androidx.navigation.NavHostController
 import com.theveloper.pixelplay.BottomNavItem
 import com.theveloper.pixelplay.data.preferences.NavBarStyle
 import com.theveloper.pixelplay.presentation.components.scoped.CustomNavigationBarItem
+import com.theveloper.pixelplay.presentation.navigation.Screen
 import kotlinx.collections.immutable.ImmutableList
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 internal val NavBarContentHeight = 90.dp // Altura del contenido de la barra de navegación
 internal val NavBarContentHeightFullWidth = NavBarContentHeight // Altura del contenido de la barra de navegación en modo completo
@@ -31,14 +42,17 @@ private fun PlayerInternalNavigationItemsRow(
     navItems: ImmutableList<BottomNavItem>,
     currentRoute: String?,
     modifier: Modifier = Modifier,
-    navBarStyle: String
+    navBarStyle: String,
+    onSearchIconDoubleTap: () -> Unit
 ) {
     val navBarInsetPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val latestCurrentRoute by rememberUpdatedState(currentRoute)
+    val latestOnSearchIconDoubleTap by rememberUpdatedState(onSearchIconDoubleTap)
 
     val rowModifier = if (navBarStyle == NavBarStyle.FULL_WIDTH) {
         modifier
             .fillMaxWidth()
-            .padding(top = 14.dp, bottom = navBarInsetPadding, start = 12.dp, end = 12.dp)
+            .padding(top = 0.dp, bottom = navBarInsetPadding, start = 12.dp, end = 12.dp)
     } else {
         modifier
             .padding(horizontal = 10.dp)
@@ -49,6 +63,8 @@ private fun PlayerInternalNavigationItemsRow(
         horizontalArrangement = Arrangement.SpaceAround,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        val scope = rememberCoroutineScope()
+        var lastSearchTapTimestamp by remember { mutableStateOf(0L) }
         navItems.forEach { item ->
             val isSelected = currentRoute == item.screen.route
             val selectedColor = MaterialTheme.colorScheme.primary
@@ -79,12 +95,45 @@ private fun PlayerInternalNavigationItemsRow(
             val labelLambda: @Composable () -> Unit = remember(item.label) {
                 { Text(item.label) }
             }
-            val onClickLambda = remember(navController, item.screen.route) {
+            val onClickLambda: () -> Unit = remember(item.screen.route, navController, scope) {
                 {
-                    navController.navigate(item.screen.route) {
-                        popUpTo(navController.graph.id) { inclusive = true; saveState = false }
-                        launchSingleTop = true
-                        restoreState = false
+                    val itemRoute = item.screen.route
+                    val isSearchTab = itemRoute == Screen.Search.route
+                    val isAlreadySelected = latestCurrentRoute == itemRoute
+
+                    if (isSearchTab) {
+                        val now = SystemClock.elapsedRealtime()
+                        val isDoubleTap = now - lastSearchTapTimestamp <= 350L
+                        lastSearchTapTimestamp = now
+
+                        if (!isAlreadySelected) {
+                            navController.navigate(itemRoute) {
+                                popUpTo(navController.graph.id) { inclusive = true; saveState = false }
+                                launchSingleTop = true
+                                restoreState = false
+                            }
+                        }
+
+                        if (isDoubleTap) {
+                            lastSearchTapTimestamp = 0L
+                            if (isAlreadySelected) {
+                                latestOnSearchIconDoubleTap()
+                            } else {
+                                scope.launch {
+                                    delay(160L)
+                                    latestOnSearchIconDoubleTap()
+                                }
+                            }
+                        }
+                    } else if (!isAlreadySelected) {
+                        lastSearchTapTimestamp = 0L
+                        navController.navigate(itemRoute) {
+                            popUpTo(navController.graph.id) { inclusive = true; saveState = false }
+                            launchSingleTop = true
+                            restoreState = false
+                        }
+                    } else {
+                        lastSearchTapTimestamp = 0L
                     }
                 }
             }
@@ -113,13 +162,15 @@ fun PlayerInternalNavigationBar(
     navItems: ImmutableList<BottomNavItem>,
     currentRoute: String?,
     modifier: Modifier = Modifier,
-    navBarStyle: String
+    navBarStyle: String,
+    onSearchIconDoubleTap: () -> Unit = {}
 ) {
     PlayerInternalNavigationItemsRow(
         navController = navController,
         navItems = navItems,
         currentRoute = currentRoute,
         navBarStyle = navBarStyle,
+        onSearchIconDoubleTap = onSearchIconDoubleTap,
         modifier = modifier
     )
 }

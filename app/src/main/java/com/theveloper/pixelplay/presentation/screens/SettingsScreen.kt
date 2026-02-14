@@ -82,6 +82,7 @@ import kotlinx.coroutines.launch
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.util.UnstableApi
 import androidx.navigation.NavController
+import com.theveloper.pixelplay.data.preferences.LaunchTab
 
 @Composable
 fun SettingsTopBar(
@@ -172,6 +173,12 @@ fun SettingsScreen(
     val minTopBarHeightPx = with(density) { minTopBarHeight.toPx() }
     val maxTopBarHeightPx = with(density) { maxTopBarHeight.toPx() }
 
+    val uiState by settingsViewModel.uiState.collectAsState()
+    val launchTab = uiState.launchTab
+    val useSmoothCorners by settingsViewModel.useSmoothCorners.collectAsState()
+
+    var showCornerRadiusOverlay by remember { mutableStateOf(false) }
+
     val topBarHeight = remember { Animatable(maxTopBarHeightPx) }
     var collapseFraction by remember { mutableStateOf(0f) }
 
@@ -251,7 +258,11 @@ fun SettingsScreen(
             item {
                 val isDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
                 ExpressiveSettingsGroup {
-                    val mainCategories = SettingsCategory.entries.filter { it != SettingsCategory.ABOUT && it != SettingsCategory.EQUALIZER }
+                    val mainCategories = SettingsCategory.entries.filter { 
+                        it != SettingsCategory.ABOUT && 
+                        it != SettingsCategory.EQUALIZER &&
+                        it != SettingsCategory.DEVICE_CAPABILITIES
+                    }
                     
                     mainCategories.forEachIndexed { index, category ->
                         val colors = getCategoryColors(category, isDark)
@@ -282,6 +293,16 @@ fun SettingsScreen(
                     category = SettingsCategory.EQUALIZER,
                     customColors = getCategoryColors(SettingsCategory.EQUALIZER, isDark),
                     onClick = { navController.navigate(Screen.Equalizer.route) }, // Direct navigation
+                    shape = RoundedCornerShape(24.dp)
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                // Device Capabilities (Standalone)
+                ExpressiveCategoryItem(
+                    category = SettingsCategory.DEVICE_CAPABILITIES,
+                    customColors = getCategoryColors(SettingsCategory.DEVICE_CAPABILITIES, isDark),
+                    onClick = { navController.navigate(Screen.DeviceCapabilities.route) },
                     shape = RoundedCornerShape(24.dp)
                 )
 
@@ -428,9 +449,12 @@ private fun getCategoryColors(category: SettingsCategory, isDark: Boolean): Pair
             SettingsCategory.LIBRARY -> Color(0xFF004A77) to Color(0xFFC2E7FF) 
             SettingsCategory.APPEARANCE -> Color(0xFF7D5260) to Color(0xFFFFD8E4) 
             SettingsCategory.PLAYBACK -> Color(0xFF633B48) to Color(0xFFFFD8EC) 
+            SettingsCategory.BEHAVIOR -> Color(0xFF3E4C63) to Color(0xFFD7E3FF)
             SettingsCategory.AI_INTEGRATION -> Color(0xFF004F58) to Color(0xFF88FAFF) 
+            SettingsCategory.BACKUP_RESTORE -> Color(0xFF3B4869) to Color(0xFFD9E2FF)
             SettingsCategory.DEVELOPER -> Color(0xFF324F34) to Color(0xFFCBEFD0) 
             SettingsCategory.EQUALIZER -> Color(0xFF6E4E13) to Color(0xFFFFDEAC) 
+            SettingsCategory.DEVICE_CAPABILITIES -> Color(0xFF004D61) to Color(0xFFACEFEE) // Custom teal/cyan mix
             SettingsCategory.ABOUT -> Color(0xFF3F474D) to Color(0xFFDEE3EB) 
         }
     } else {
@@ -438,9 +462,12 @@ private fun getCategoryColors(category: SettingsCategory, isDark: Boolean): Pair
             SettingsCategory.LIBRARY -> Color(0xFFD7E3FF) to Color(0xFF005AC1)
             SettingsCategory.APPEARANCE -> Color(0xFFFFD8E4) to Color(0xFF631835)
             SettingsCategory.PLAYBACK -> Color(0xFFFFD8EC) to Color(0xFF631B4B)
+            SettingsCategory.BEHAVIOR -> Color(0xFFD7E3FF) to Color(0xFF253347)
             SettingsCategory.AI_INTEGRATION -> Color(0xFFCCE8EA) to Color(0xFF004F58)
+            SettingsCategory.BACKUP_RESTORE -> Color(0xFFD9E2FF) to Color(0xFF27304E)
             SettingsCategory.DEVELOPER -> Color(0xFFCBEFD0) to Color(0xFF042106)
             SettingsCategory.EQUALIZER -> Color(0xFFFFDEAC) to Color(0xFF281900)
+            SettingsCategory.DEVICE_CAPABILITIES -> Color(0xFFACEFEE) to Color(0xFF002022)
             SettingsCategory.ABOUT -> Color(0xFFEFF1F7) to Color(0xFF44474F)
         }
     }

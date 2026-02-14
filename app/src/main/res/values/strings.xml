@@ -27,6 +27,7 @@
     <string name="searched_for_x_format">Searched for \"%s\"</string>
     <string name="search">Search</string>
     <string name="searching_lyrics">Searching for lyrics…</string>
+    <string name="lyrics_embedded_already_available">Embedded lyrics already found. Online fetch skipped.</string>
     <string name="fetch_lyrics_show_options_title">Show lyric options</string>
     <string name="fetch_lyrics_show_options_subtitle">Always open the picker instead of auto-applying the first match</string>
     <string name="error">Error</string>
@@ -94,4 +95,5 @@
     <string name="artist_id_not_found">Artist ID not found</string>
     <string name="error_loading_artist">Error loading artist data: %s</string>
     <string name="could_not_find_artist">Could not find the artist</string>
+    <string name="no_valid_songs">No valid songs found to play</string>
 </resources>

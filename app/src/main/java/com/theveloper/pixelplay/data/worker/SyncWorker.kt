@@ -19,6 +19,7 @@ import com.theveloper.pixelplay.data.database.ArtistEntity
 import com.theveloper.pixelplay.data.database.MusicDao
 import com.theveloper.pixelplay.data.database.SongArtistCrossRef
 import com.theveloper.pixelplay.data.database.SongEntity
+import com.theveloper.pixelplay.data.database.TelegramDao // Added
 import com.theveloper.pixelplay.data.media.AudioMetadataReader
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
@@ -26,6 +27,7 @@ import com.theveloper.pixelplay.data.repository.LyricsRepository
 import com.theveloper.pixelplay.utils.AlbumArtCacheManager
 import com.theveloper.pixelplay.utils.AlbumArtUtils
 import com.theveloper.pixelplay.utils.AudioMetaUtils.getAudioMetadata
+import com.theveloper.pixelplay.utils.DirectoryRuleResolver
 import com.theveloper.pixelplay.utils.normalizeMetadataTextOrEmpty
 import com.theveloper.pixelplay.utils.splitArtistsByDelimiters
 import dagger.assisted.Assisted
@@ -36,6 +38,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.absoluteValue // Added
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -44,6 +47,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import timber.log.Timber
 
 enum class SyncMode {
     INCREMENTAL,
@@ -59,7 +63,8 @@ constructor(
         @Assisted workerParams: WorkerParameters,
         private val musicDao: MusicDao,
         private val userPreferencesRepository: UserPreferencesRepository,
-        private val lyricsRepository: LyricsRepository
+        private val lyricsRepository: LyricsRepository,
+        private val telegramDao: TelegramDao
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val contentResolver: ContentResolver = appContext.contentResolver
@@ -73,10 +78,8 @@ constructor(
                     val syncMode = SyncMode.valueOf(syncModeName)
                     val forceMetadata = inputData.getBoolean(INPUT_FORCE_METADATA, false)
 
-                    Log.i(
-                            TAG,
-                            "Starting MediaStore synchronization (Mode: $syncMode, ForceMetadata: $forceMetadata)..."
-                    )
+                    Timber.tag(TAG)
+                        .i("Starting MediaStore synchronization (Mode: $syncMode, ForceMetadata: $forceMetadata)...")
                     val startTime = System.currentTimeMillis()
 
                     val artistDelimiters = userPreferencesRepository.artistDelimitersFlow.first()
@@ -84,18 +87,32 @@ constructor(
                             userPreferencesRepository.groupByAlbumArtistFlow.first()
                     val rescanRequired =
                             userPreferencesRepository.artistSettingsRescanRequiredFlow.first()
+                    val directoryRulesVersion =
+                        userPreferencesRepository.getDirectoryRulesVersion()
+                    val lastAppliedDirectoryRulesVersion =
+                        userPreferencesRepository.getLastAppliedDirectoryRulesVersion()
+                    val directoryRulesChanged =
+                        directoryRulesVersion != lastAppliedDirectoryRulesVersion
+
+                    // Feature: Directory Filtering
+                    val allowedDirs = userPreferencesRepository.allowedDirectoriesFlow.first()
+                    val blockedDirs = userPreferencesRepository.blockedDirectoriesFlow.first()
+                    val directoryResolver = DirectoryRuleResolver(allowedDirs, blockedDirs)
+                    
                     var lastSyncTimestamp = userPreferencesRepository.getLastSyncTimestamp()
 
-                    Log.d(
-                            TAG,
-                            "Artist parsing delimiters: $artistDelimiters, groupByAlbumArtist: $groupByAlbumArtist, rescanRequired: $rescanRequired"
-                    )
+                    Timber.tag(TAG)
+                        .d(
+                            "Artist delimiters=$artistDelimiters, groupByAlbumArtist=$groupByAlbumArtist, " +
+                                "rescanRequired=$rescanRequired, directoryRulesChanged=$directoryRulesChanged " +
+                                "(current=$directoryRulesVersion, applied=$lastAppliedDirectoryRulesVersion)"
+                        )
 
                     // --- MEDIA SCAN PHASE ---
                     // For INCREMENTAL or FULL sync, trigger a media scan to detect new files
                     // that may not have been indexed by MediaStore yet (e.g., files added via USB)
                     if (syncMode != SyncMode.REBUILD) {
-                        triggerMediaScanForNewFiles()
+                        triggerMediaScanForNewFiles(directoryResolver)
                     }
 
                     // --- DELETION PHASE ---
@@ -103,16 +120,14 @@ constructor(
                     // We do this for INCREMENTAL and FULL modes. REBUILD clears everything anyway.
                     if (syncMode != SyncMode.REBUILD) {
                         val localSongIds = musicDao.getAllSongIds().toHashSet()
-                        val mediaStoreIds = fetchMediaStoreIds()
+                        val mediaStoreIds = fetchMediaStoreIds(directoryResolver)
 
                         // Identify IDs that are in local DB but not in MediaStore
                         val deletedIds = localSongIds - mediaStoreIds
 
                         if (deletedIds.isNotEmpty()) {
-                            Log.i(
-                                    TAG,
-                                    "Found ${deletedIds.size} deleted songs. Removing from database..."
-                            )
+                            Timber.tag(TAG)
+                                .i("Found ${deletedIds.size} deleted songs. Removing from database...")
                             // Chunk deletions to avoid SQLite variable limit (default 999)
                             val batchSize = 500
                             deletedIds.chunked(batchSize).forEach { chunk ->
@@ -120,13 +135,19 @@ constructor(
                                 musicDao.deleteCrossRefsBySongIds(chunk.toList())
                             }
                         } else {
-                            Log.d(TAG, "No deleted songs found.")
+                            Timber.tag(TAG).d("No deleted songs found.")
                         }
                     }
 
                     // --- FETCH PHASE ---
                     // Determine what to fetch based on mode
                     val isFreshInstall = musicDao.getSongCount().first() == 0
+                    val localSongsMap =
+                            if (syncMode != SyncMode.REBUILD) {
+                                musicDao.getAllSongsList().associateBy { it.id }
+                            } else {
+                                emptyMap()
+                            }
 
                     // If REBUILD or FULL or RescanRequired or Fresh Install -> Fetch EVERYTHING
                     // (timestamp = 0)
@@ -134,6 +155,7 @@ constructor(
                     val fetchTimestamp =
                             if (syncMode == SyncMode.INCREMENTAL &&
                                             !rescanRequired &&
+                                            !directoryRulesChanged &&
                                             !isFreshInstall
                             ) {
                                 lastSyncTimestamp /
@@ -142,7 +164,8 @@ constructor(
                                 0L
                             }
 
-                    Log.i(TAG, "Fetching music from MediaStore (since: $fetchTimestamp seconds)...")
+                    Timber.tag(TAG)
+                        .i("Fetching music from MediaStore (since: $fetchTimestamp seconds)...")
 
                     // Update every 50 songs or ~5% of library
                     val progressBatchSize = 50
@@ -151,6 +174,8 @@ constructor(
                             fetchMusicFromMediaStore(
                                     fetchTimestamp,
                                     forceMetadata,
+                                    directoryResolver,
+                                    localSongsMap,
                                     progressBatchSize
                             ) { current, total, phaseOrdinal ->
                                 setProgress(
@@ -162,44 +187,37 @@ constructor(
                                 )
                             }
 
-                    Log.i(
-                            TAG,
-                            "Fetched ${mediaStoreSongs.size} new/modified songs from MediaStore."
-                    )
+                    Timber.tag(TAG)
+                        .i("Fetched ${mediaStoreSongs.size} new/modified songs from MediaStore.")
 
                     // --- PROCESSING PHASE ---
                     if (mediaStoreSongs.isNotEmpty()) {
 
                         // If rebuilding, clear everything first
                         if (syncMode == SyncMode.REBUILD) {
-                            Log.i(TAG, "Rebuild mode: Clearing all music data before insert.")
+                            Timber.tag(TAG)
+                                .i("Rebuild mode: Clearing all music data before insert.")
                             musicDao.clearAllMusicDataWithCrossRefs()
                         }
 
-                        val existingArtistImageUrls =
+                        val allExistingArtists =
                                 if (syncMode == SyncMode.REBUILD) {
-                                    emptyMap()
+                                    emptyList()
                                 } else {
-                                    musicDao.getAllArtistsListRaw().associate {
-                                        it.id to it.imageUrl
-                                    }
+                                    musicDao.getAllArtistsListRaw()
                                 }
 
-                        // Prepare list of existing songs to preserve user edits
-                        // We only need to check against existing songs if we are updating them
-                        val localSongsMap =
-                                if (syncMode != SyncMode.REBUILD) {
-                                    musicDao.getAllSongsList().associateBy { it.id }
-                                } else {
-                                    emptyMap()
-                                }
+                        val existingArtistImageUrls =
+                                allExistingArtists.associate { it.id to it.imageUrl }
+                        
+                        // Load all existing artist IDs to ensure stability across incremental syncs
+                        val existingArtistIdMap = allExistingArtists.associate { it.name to it.id }.toMutableMap()
+                        val maxArtistId = musicDao.getMaxArtistId() ?: 0L
 
                         val songsToProcess = mediaStoreSongs
 
-                        Log.i(
-                                TAG,
-                                "Processing ${songsToProcess.size} songs for upsert. Hash: ${songsToProcess.hashCode()}"
-                        )
+                        Timber.tag(TAG)
+                            .i("Processing ${songsToProcess.size} songs for upsert. Hash: ${songsToProcess.hashCode()}")
 
                         val songsToInsert =
                                 songsToProcess.map { mediaStoreSong ->
@@ -277,7 +295,9 @@ constructor(
                                         songs = songsToInsert,
                                         artistDelimiters = artistDelimiters,
                                         groupByAlbumArtist = groupByAlbumArtist,
-                                        existingArtistImageUrls = existingArtistImageUrls
+                                        existingArtistImageUrls = existingArtistImageUrls,
+                                        existingArtistIdMap = existingArtistIdMap,
+                                        initialMaxArtistId = maxArtistId
                                 )
 
                         // Use incrementalSyncMusicData for all modes except REBUILD
@@ -305,11 +325,12 @@ constructor(
                         userPreferencesRepository.clearArtistSettingsRescanRequired()
 
                         val endTime = System.currentTimeMillis()
-                        Log.i(
-                                TAG,
-                                "Synchronization finished successfully in ${endTime - startTime}ms."
-                        )
+                        Timber.tag(TAG)
+                            .i("Synchronization finished successfully in ${endTime - startTime}ms.")
                         userPreferencesRepository.setLastSyncTimestamp(System.currentTimeMillis())
+                        userPreferencesRepository.markDirectoryRulesVersionApplied(
+                            directoryRulesVersion
+                        )
 
                         // Count total songs for the output
                         val totalSongs = musicDao.getSongCount().first()
@@ -317,7 +338,7 @@ constructor(
                         // --- LRC SCANNING PHASE ---
                         val autoScanLrc = userPreferencesRepository.autoScanLrcFilesFlow.first()
                         if (autoScanLrc) {
-                            Log.i(TAG, "Auto-scan LRC files enabled. Starting scan phase...")
+                            Timber.tag(TAG).i("Auto-scan LRC files enabled. Starting scan phase...")
 
                             val allSongsEntities = musicDao.getAllSongsList()
                             val allSongs =
@@ -364,8 +385,14 @@ constructor(
                         // Clean orphaned album art cache files
                         val allSongIds = musicDao.getAllSongIds().toSet()
                         AlbumArtCacheManager.cleanOrphanedCacheFiles(applicationContext, allSongIds)
+                        
+                        // Sync Telegram songs
+                        syncTelegramData()
+                        
+                        // Recalculate total after telegram sync
+                        val finalTotalSongs = musicDao.getSongCount().first()
 
-                        Result.success(workDataOf(OUTPUT_TOTAL_SONGS to totalSongs))
+                        Result.success(workDataOf(OUTPUT_TOTAL_SONGS to finalTotalSongs))
                     } else {
                         Log.i(TAG, "No new or modified songs found.")
 
@@ -386,6 +413,9 @@ constructor(
                                 "Synchronization (No Changes) finished in ${endTime - startTime}ms."
                         )
                         userPreferencesRepository.setLastSyncTimestamp(System.currentTimeMillis())
+                        userPreferencesRepository.markDirectoryRulesVersionApplied(
+                            directoryRulesVersion
+                        )
 
                         val totalSongs = musicDao.getSongCount().first()
                         
@@ -393,7 +423,13 @@ constructor(
                         val allSongIds = musicDao.getAllSongIds().toSet()
                         AlbumArtCacheManager.cleanOrphanedCacheFiles(applicationContext, allSongIds)
                         
-                        Result.success(workDataOf(OUTPUT_TOTAL_SONGS to totalSongs))
+                        // Sync Telegram songs
+                        syncTelegramData()
+                        
+                        // Recalculate total after telegram sync
+                        val finalTotalSongs = musicDao.getSongCount().first()
+
+                        Result.success(workDataOf(OUTPUT_TOTAL_SONGS to finalTotalSongs))
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error during MediaStore synchronization", e)
@@ -429,9 +465,10 @@ constructor(
      * Efficiently fetches ONLY the IDs of all songs in MediaStore. Used for fast deletion
      * detection.
      */
-    private fun fetchMediaStoreIds(): Set<Long> {
+    private fun fetchMediaStoreIds(directoryResolver: DirectoryRuleResolver): Set<Long> {
         val ids = HashSet<Long>()
-        val projection = arrayOf(MediaStore.Audio.Media._ID)
+        // We need DATA to check path filtering
+        val projection = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.DATA)
         val (selection, selectionArgs) = getBaseSelection()
 
         contentResolver.query(
@@ -443,8 +480,14 @@ constructor(
                 )
                 ?.use { cursor ->
                     val idCol = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
-                    if (idCol >= 0) {
+                    val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                    if (idCol >= 0 && dataCol >= 0) {
                         while (cursor.moveToNext()) {
+                            val path = cursor.getString(dataCol)
+                            val parentPath = File(path).parent
+                            if (parentPath != null && directoryResolver.isBlocked(parentPath)) {
+                                continue 
+                            }
                             ids.add(cursor.getLong(idCol))
                         }
                     }
@@ -468,64 +511,14 @@ constructor(
             songs: List<SongEntity>,
             artistDelimiters: List<String>,
             groupByAlbumArtist: Boolean,
-            existingArtistImageUrls: Map<Long, String?>
+            existingArtistImageUrls: Map<Long, String?>,
+            existingArtistIdMap: MutableMap<String, Long>,
+            initialMaxArtistId: Long
     ): MultiArtistProcessResult {
-        // Need to take into account potentially existing artist IDs if we are in incremental mode
-        // For simplicity in this optimization, we re-calculate from the current batch.
-        // A more robust solution might check DB for existing artist IDs, but collisions are handled
-        // by Room REPLACE.
-        // However, to maintain stability of IDs for same names, we should ideally query mapping.
-        // But for now, we'll rely on the fact that we are processing a batch.
-        // TODO (Future): Load all existing Artist Name -> ID mappings to preserve IDs across
-        // incremental updates.
-        // Currently, new artists in this batch will get new IDs. Existing artists (by name) in this
-        // batch
-        // might get re-assigned IDs if we don't look them up.
-        // This is acceptable for a "Sync" worker - duplicate artists are merged by name in many
-        // players,
-        // but here we have explicit IDs.
-
-        // Optimization: In a real incremental sync, we might insert a song with an artist "Foo".
-        // If "Foo" acts as a new artist here, it might get a new ID, duplicating "Foo" in the DB
-        // if the DB already has "Foo" with a different ID.
-        // Room @Insert(onConflict = REPLACE) for Artists means if ID clashes, it replaces.
-        // But we are generating IDs here.
-
-        // Fix: We MUST know existing artist names to reuse IDs.
-        // Let's load the map of Name -> ID for all artists currently in DB
-        // Blocking call is fine here as we are in background worker
-        val existingArtistMap = ConcurrentHashMap<String, Long>()
-        // We can't access this safely in a blocking way easily without a new DAO method or taking
-        // it from existing lists
-        // Ideally we pass this map in.
-
-        // For the scope of this refactor, we will maintain the existing logic roughly,
-        // but it is a known limitation that incremental syncs might create duplicate artist entries
-        // if name matching isn't perfect against DB.
-        // However, since we use `artistName` as key in `artistNameToId` map locally,
-        // we ensure consistency within the batch.
-
-        // IMPROVEMENT: Retrieve max ID from DB to ensure we don't collide or reset.
-        // We'll trust `nextArtistId` starting from max existing in the batch is risky if we don't
-        // know DB max.
-        // Let's get maxArtistId from DB.
-
-        // Since we cannot easily add a method to DAO right now without modifying it,
-        // we will iterate and build the map from the passed `existingArtistImageUrls` keys if
-        // possible,
-        // or just rely on safely generating new IDs.
-
-        // Actually, `musicDao.getAllArtistsListRaw()` was called in doWork. We can use it.
-        // We'll pass `existingArtists` to this function ideally.
-        // For now, let's just make it robust enough.
-
-        val maxExistingArtistId = songs.maxOfOrNull { it.artistId } ?: 0L
-        // Note: songs.maxOfOrNull might be from the batch, not DB.
-        // Ideally we should query "SELECT MAX(id) FROM artists"
-
-        val nextArtistId = AtomicLong(maxExistingArtistId + 10000) // Safety buffer
-
-        val artistNameToId = mutableMapOf<String, Long>()
+        
+        val nextArtistId = AtomicLong(initialMaxArtistId + 1)
+        val artistNameToId = existingArtistIdMap // Re-use the map passed in
+        
         val allCrossRefs = mutableListOf<SongArtistCrossRef>()
         val artistTrackCounts = mutableMapOf<Long, Int>()
         val albumMap = mutableMapOf<Pair<String, String>, Long>()
@@ -543,16 +536,13 @@ constructor(
             artistsForSong.forEach { artistName ->
                 val normalizedName = artistName.trim()
                 if (normalizedName.isNotEmpty() && !artistNameToId.containsKey(normalizedName)) {
-                    val id =
-                            if (normalizedName == songArtistNameTrimmed) {
-                                song.artistId
-                            } else {
-                                nextArtistId.getAndIncrement()
-                            }
-                    artistNameToId[normalizedName] = id
+                     // Check if it's the song's primary artist and we want to preserve that ID if possible?
+                     // Actually, just generate new ID if not found in map.
+                     val id = nextArtistId.getAndIncrement()
+                     artistNameToId[normalizedName] = id
                 }
             }
-
+            
             val primaryArtistName =
                     artistsForSong.firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
                             ?: songArtistNameTrimmed
@@ -562,77 +552,79 @@ constructor(
                 val normalizedName = artistName.trim()
                 val artistId = artistNameToId[normalizedName]
                 if (artistId != null) {
+                    val isPrimary = (index == 0) // First artist is primary
                     allCrossRefs.add(
                             SongArtistCrossRef(
                                     songId = song.id,
                                     artistId = artistId,
-                                    isPrimary = index == 0
+                                    isPrimary = isPrimary
                             )
                     )
                     artistTrackCounts[artistId] = (artistTrackCounts[artistId] ?: 0) + 1
                 }
             }
 
-            val albumArtistName =
-                    if (groupByAlbumArtist && !song.albumArtist.isNullOrBlank()) {
-                        song.albumArtist
-                    } else {
-                        primaryArtistName
-                    }
-            val canonicalAlbumId =
-                    albumMap.getOrPut(Pair(song.albumName, albumArtistName)) { song.albumId }
+            // --- Album Logic ---
+            val rawAlbumName = song.albumName.trim()
+            val albumIdentityArtist = if (groupByAlbumArtist) {
+                song.albumArtist?.trim()?.takeIf { it.isNotEmpty() } ?: primaryArtistName
+            } else {
+                primaryArtistName
+            }
+            
+            val albumKey = rawAlbumName to albumIdentityArtist
+            
+            if (!albumMap.containsKey(albumKey)) {
+                albumMap[albumKey] = song.albumId 
+            }
+            val finalAlbumId = albumMap[albumKey] ?: song.albumId // fallback
 
             correctedSongs.add(
                     song.copy(
                             artistId = primaryArtistId,
-                            artistName = primaryArtistName,
-                            albumId = canonicalAlbumId
+                            artistName = rawArtistName, // Preserving full artist string for display
+                            albumId = finalAlbumId
                     )
             )
         }
 
-        // Create unique albums
-        val albums =
-                correctedSongs.groupBy { it.albumId }.map { (albumId, songsInAlbum) ->
-                    val firstSong = songsInAlbum.first()
-                    val albumArtistName =
-                            if (groupByAlbumArtist && !firstSong.albumArtist.isNullOrBlank()) {
-                                firstSong.albumArtist
-                            } else {
-                                firstSong.artistName
-                            }
-                    val albumArtistId = artistNameToId[albumArtistName] ?: firstSong.artistId
+        // Build Entities
+        val artistEntities = artistNameToId.map { (name, id) ->
+            val count = artistTrackCounts[id] ?: 0
+            ArtistEntity(
+                id = id,
+                name = name,
+                trackCount = count,
+                imageUrl = existingArtistImageUrls[id]
+            )
+        }
+        
+        // Re-calculate Album Entities from the corrected songs to ensure we have valid metadata (Art, Year)
+        // which isn't available in the simple albumMap (which only has ID)
+        val albumEntities = correctedSongs.groupBy { it.albumId }.map { (catAlbumId, songsInAlbum) ->
+             val firstSong = songsInAlbum.first()
+             // Determine Album Artist Name
+             val determinedAlbumArtist = firstSong.albumArtist?.takeIf { it.isNotBlank() } 
+                 ?: firstSong.artistName
+                 
+             // Determine Album Artist ID (best effort lookup)
+             val determinedAlbumArtistId = artistNameToId[determinedAlbumArtist] ?: 0L
 
-                    AlbumEntity(
-                            id = albumId,
-                            title = firstSong.albumName,
-                            artistName = albumArtistName,
-                            artistId = albumArtistId,
-                            albumArtUriString = firstSong.albumArtUriString,
-                            songCount = songsInAlbum.size,
-                            year = firstSong.year
-                    )
-                }
-
-        val artists =
-                artistNameToId.mapNotNull { (name, id) ->
-                    val trackCount = artistTrackCounts[id] ?: 0
-                    if (trackCount > 0) {
-                        ArtistEntity(
-                                id = id,
-                                name = name,
-                                trackCount = trackCount,
-                                imageUrl = existingArtistImageUrls[id]
-                        )
-                    } else {
-                        null
-                    }
-                }
+             AlbumEntity(
+                 id = catAlbumId,
+                 title = firstSong.albumName,
+                 artistName = determinedAlbumArtist,
+                 artistId = determinedAlbumArtistId,
+                 albumArtUriString = firstSong.albumArtUriString,
+                 songCount = songsInAlbum.size, 
+                 year = firstSong.year
+             )
+        }
 
         return MultiArtistProcessResult(
-                songs = correctedSongs,
-                albums = albums,
-                artists = artists,
+                songs = correctedSongs, // Corrected songs have the right Album IDs now
+                albums = albumEntities,
+                artists = artistEntities,
                 crossRefs = allCrossRefs
         )
     }
@@ -785,6 +777,7 @@ constructor(
             val albumId: Long,
             val artistId: Long,
             val filePath: String,
+            val mimeType: String?,
             val title: String,
             val artist: String,
             val album: String,
@@ -795,9 +788,30 @@ constructor(
             val dateModified: Long
     )
 
+    private fun isSongUnchanged(raw: RawSongData, existing: SongEntity?): Boolean {
+        if (existing == null) return false
+
+        val parentDir = File(raw.filePath).parent ?: ""
+        val existingDateModifiedSeconds = TimeUnit.MILLISECONDS.toSeconds(existing.dateAdded)
+
+        return existing.filePath == raw.filePath &&
+            existing.parentDirectoryPath == parentDir &&
+            existing.title == raw.title &&
+            existing.artistName == raw.artist &&
+            existing.albumName == raw.album &&
+            existing.albumId == raw.albumId &&
+            existing.artistId == raw.artistId &&
+            existing.duration == raw.duration &&
+            existing.trackNumber == raw.trackNumber &&
+            existing.year == raw.year &&
+            existingDateModifiedSeconds == raw.dateModified
+    }
+
     private suspend fun fetchMusicFromMediaStore(
             sinceTimestamp: Long, // Seconds
             forceMetadata: Boolean,
+            directoryResolver: DirectoryRuleResolver,
+            existingSongsById: Map<Long, SongEntity>,
             progressBatchSize: Int,
             onProgress: suspend (current: Int, total: Int, phaseOrdinal: Int) -> Unit
     ): List<SongEntity> {
@@ -818,6 +832,7 @@ constructor(
                         MediaStore.Audio.Media.ALBUM_ARTIST,
                         MediaStore.Audio.Media.DURATION,
                         MediaStore.Audio.Media.DATA,
+                        MediaStore.Audio.Media.MIME_TYPE,
                         MediaStore.Audio.Media.TRACK,
                         MediaStore.Audio.Media.YEAR,
                         MediaStore.Audio.Media.DATE_MODIFIED
@@ -862,18 +877,34 @@ constructor(
                     val albumArtistCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM_ARTIST)
                     val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
                     val dataCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+                    val mimeTypeCol = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
                     val trackCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TRACK)
                     val yearCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.YEAR)
                     val dateAddedCol =
                             cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_MODIFIED)
 
                     while (cursor.moveToNext()) {
+                        try {
+                            val data = cursor.getString(dataCol)
+                            val parentPath = File(data).parent
+                            if (parentPath != null) {
+                                val normalizedParent = File(parentPath).absolutePath
+                                if (directoryResolver.isBlocked(normalizedParent)) {
+                                    continue
+                                }
+                            }
+                        } catch (e: Exception) {
+                            // Proceed on error
+                        }
+
+                        val songId = cursor.getLong(idCol)
                         rawDataList.add(
                                 RawSongData(
                                         id = cursor.getLong(idCol),
                                         albumId = cursor.getLong(albumIdCol),
                                         artistId = cursor.getLong(artistIdCol),
                                         filePath = cursor.getString(dataCol) ?: "",
+                                        mimeType = if (mimeTypeCol >= 0) cursor.getString(mimeTypeCol) else null,
                                         title =
                                                 cursor.getString(titleCol)
                                                         .normalizeMetadataTextOrEmpty()
@@ -901,19 +932,34 @@ constructor(
                     }
                 }
 
-        val totalCount = rawDataList.size
+        if (rawDataList.isEmpty()) {
+            Trace.endSection()
+            return emptyList()
+        }
+
+        val songsToProcess =
+            if (!deepScan && existingSongsById.isNotEmpty()) {
+                rawDataList.filterNot { raw ->
+                    isSongUnchanged(raw, existingSongsById[raw.id])
+                }
+            } else {
+                rawDataList
+            }
+
+        val totalCount = songsToProcess.size
         if (totalCount == 0) {
             Trace.endSection()
             return emptyList()
         }
 
         // Phase 2: Parallel processing of songs
+        onProgress(0, totalCount, SyncProgress.SyncPhase.PROCESSING_FILES.ordinal)
         val processedCount = AtomicInteger(0)
         val concurrencyLimit = 8 // Limit parallel operations to prevent resource exhaustion
         val semaphore = Semaphore(concurrencyLimit)
 
         val songs = coroutineScope {
-            rawDataList
+            songsToProcess
                     .map { raw ->
                         async {
                             semaphore.withPermit {
@@ -926,7 +972,7 @@ constructor(
                                     onProgress(
                                             count,
                                             totalCount,
-                                            SyncProgress.SyncPhase.FETCHING_MEDIASTORE.ordinal
+                                            SyncProgress.SyncPhase.PROCESSING_FILES.ordinal
                                     )
                                 }
 
@@ -1036,7 +1082,7 @@ constructor(
                             if (seconds > 0) TimeUnit.SECONDS.toMillis(seconds)
                             else System.currentTimeMillis()
                         },
-                mimeType = audioMetadata?.mimeType,
+                mimeType = audioMetadata?.mimeType ?: raw.mimeType,
                 sampleRate = audioMetadata?.sampleRate,
                 bitrate = audioMetadata?.bitrate
         )
@@ -1047,48 +1093,65 @@ constructor(
      * This is a fast, incremental scan optimized for pull-to-refresh.
      * It compares filesystem files with MediaStore entries and only scans the difference.
      */
-    private suspend fun triggerMediaScanForNewFiles() {
+    private suspend fun triggerMediaScanForNewFiles(directoryResolver: DirectoryRuleResolver) {
         withContext(Dispatchers.IO) {
-            val directories =
-                    listOf(
-                            Environment.getExternalStoragePublicDirectory(
-                                    Environment.DIRECTORY_MUSIC
-                            ),
-                            Environment.getExternalStoragePublicDirectory(
-                                    Environment.DIRECTORY_DOWNLOADS
-                            ),
-                            File(Environment.getExternalStorageDirectory(), "Music"),
-                            File(Environment.getExternalStorageDirectory(), "Download")
-                    )
-
-            // Filter to only existing directories
-            val existingDirs =
-                    directories
-                            .filter { it.exists() && it.isDirectory }
-                            .map { it.absolutePath }
-                            .distinct()
-
-            if (existingDirs.isEmpty()) {
-                Log.d(TAG, "No music directories found to scan")
-                return@withContext
-            }
+            val externalRoot = Environment.getExternalStorageDirectory()
+            val allowedSet =
+                userPreferencesRepository.allowedDirectoriesFlow.first().map { File(it) }.toSet()
+            Log.i(TAG, "Starting media scan for new files. Explicit includes: ${allowedSet.size}")
 
             // Get all file paths currently in MediaStore
             val mediaStorePaths = fetchMediaStoreFilePaths()
-            
             Log.d(TAG, "MediaStore has ${mediaStorePaths.size} known files")
+
+            val scanRoots =
+                collectPreferredScanRoots(
+                    externalRoot = externalRoot,
+                    mediaStorePaths = mediaStorePaths,
+                    explicitAllowedRoots = allowedSet,
+                    directoryResolver = directoryResolver
+                )
+
+            if (scanRoots.isEmpty()) {
+                Log.d(TAG, "No eligible roots found for media scan")
+                return@withContext
+            }
 
             // Collect audio files from filesystem that are NOT in MediaStore
             val audioExtensions =
                     setOf("mp3", "flac", "m4a", "wav", "ogg", "opus", "aac", "wma", "aiff")
-            val newFilesToScan = mutableListOf<String>()
+            val newFilesToScan = linkedSetOf<String>()
 
-            existingDirs.forEach { dirPath ->
-                val dir = File(dirPath)
-                dir.walkTopDown()
-                        .filter { it.isFile && it.extension.lowercase() in audioExtensions }
-                        .filter { it.absolutePath !in mediaStorePaths } // Only new files
-                        .forEach { newFilesToScan.add(it.absolutePath) }
+            scanRoots.forEach { root ->
+                root.walkTopDown()
+                    .onEnter { dir ->
+                        val name = dir.name
+                        if (dir.isHidden || name.startsWith(".")) return@onEnter false
+                        val path = dir.absolutePath
+                        if (directoryResolver.isBlocked(path)) return@onEnter false
+
+                        // Default Skip Rules (System Folders)
+                        val isSystemFolder = (name == "Android" || name == "data" || name == "obb")
+                        if (isSystemFolder) {
+                            // Check if this specific folder is Explicitly Allowed or is a Parent of an allowed folder
+                            // e.g. if Allowed is "Android/media", we MUST enter "Android".
+                            // e.g. if Allowed is "Android" (root), we MUST enter "Android".
+                            val isAllowed = allowedSet.any { allowed -> 
+                                allowed.absolutePath == path || allowed.absolutePath.startsWith("$path/")
+                            }
+                            
+                            if (!isAllowed) {
+                                // Apply strict skipping for Android/data and Android/obb if not allowed
+                                val parent = dir.parentFile
+                                if (name == "Android" && parent?.absolutePath == Environment.getExternalStorageDirectory().absolutePath) return@onEnter false
+                                if (parent?.name == "Android" && (name == "data" || name == "obb")) return@onEnter false
+                            }
+                        }
+                        true
+                    }
+                    .filter { it.isFile && it.extension.lowercase() in audioExtensions }
+                    .filter { it.absolutePath !in mediaStorePaths } // Only new files
+                    .forEach { newFilesToScan.add(it.absolutePath) }
             }
 
             if (newFilesToScan.isEmpty()) {
@@ -1104,7 +1167,7 @@ constructor(
 
             MediaScannerConnection.scanFile(
                 applicationContext, 
-                newFilesToScan.toTypedArray(), 
+                newFilesToScan.toTypedArray(),
                 null
             ) { _, _ ->
                 scannedCount++
@@ -1121,6 +1184,75 @@ constructor(
                 Log.i(TAG, "Media scan completed for ${newFilesToScan.size} new files")
             }
         }
+    }
+
+    private fun collectPreferredScanRoots(
+        externalRoot: File,
+        mediaStorePaths: Set<String>,
+        explicitAllowedRoots: Set<File>,
+        directoryResolver: DirectoryRuleResolver
+    ): List<File> {
+        val candidates = linkedSetOf<File>()
+
+        // 1) Explicitly allowed roots always get priority.
+        explicitAllowedRoots.forEach { candidates.add(it) }
+
+        // 2) Common user-facing media directories.
+        listOf(
+            Environment.DIRECTORY_MUSIC,
+            Environment.DIRECTORY_DOWNLOADS,
+            Environment.DIRECTORY_PODCASTS,
+            Environment.DIRECTORY_AUDIOBOOKS,
+            Environment.DIRECTORY_RINGTONES,
+            Environment.DIRECTORY_NOTIFICATIONS
+        ).forEach { dirName ->
+            candidates.add(Environment.getExternalStoragePublicDirectory(dirName))
+        }
+
+        // 3) Top-level buckets already used by current MediaStore entries.
+        mediaStorePaths.forEach { mediaPath ->
+            val parent = File(mediaPath).parentFile ?: return@forEach
+            val parentPath = parent.absolutePath
+            if (parentPath.startsWith("${externalRoot.absolutePath}/")) {
+                val relative = parentPath.removePrefix(externalRoot.absolutePath).trimStart('/')
+                if (relative.isNotEmpty()) {
+                    val topLevel = relative.substringBefore('/')
+                    if (topLevel.isNotEmpty()) {
+                        candidates.add(File(externalRoot, topLevel))
+                    }
+                }
+            } else {
+                candidates.add(parent)
+            }
+        }
+
+        val existingRoots =
+            candidates
+                .map { it.absoluteFile }
+                .distinctBy { it.absolutePath }
+                .filter { it.exists() && it.isDirectory }
+                .filterNot { directoryResolver.isBlocked(it.absolutePath) }
+
+        if (existingRoots.isEmpty()) return emptyList()
+        return pruneNestedRoots(existingRoots)
+    }
+
+    private fun pruneNestedRoots(roots: List<File>): List<File> {
+        val normalizedRoots = roots.distinctBy { it.absolutePath.trimEnd('/') }
+        val kept = mutableListOf<File>()
+        normalizedRoots
+            .sortedBy { it.absolutePath.length }
+            .forEach { candidate ->
+                val candidatePath = candidate.absolutePath.trimEnd('/')
+                val coveredByParent = kept.any { root ->
+                    val rootPath = root.absolutePath.trimEnd('/')
+                    candidatePath == rootPath || candidatePath.startsWith("$rootPath/")
+                }
+                if (!coveredByParent) {
+                    kept.add(candidate)
+                }
+            }
+        return kept
     }
 
     /**
@@ -1201,5 +1333,173 @@ constructor(
                 OneTimeWorkRequestBuilder<SyncWorker>()
                         .setInputData(workDataOf(INPUT_SYNC_MODE to SyncMode.REBUILD.name))
                         .build()
+    }
+    
+    // Logic to sync Telegram songs into main DB with Unified Library Support
+    private suspend fun syncTelegramData() {
+        Log.i(TAG, "Syncing Telegram songs to main database (Unified Mode)...")
+        try {
+            val telegramSongs = telegramDao.getAllTelegramSongs().first()
+            val channels = telegramDao.getAllChannels().first().associateBy { it.chatId }
+            
+            if (telegramSongs.isEmpty()) { 
+                Log.d(TAG, "No Telegram songs to sync.")
+                return 
+            }
+
+            // 1. Pre-load Local Data for Merging
+            val existingArtists = musicDao.getAllArtistsListRaw().associate { it.name.trim().lowercase() to it.id }
+            val existingAlbums = musicDao.getAllAlbumsList(emptyList(), false).associate { "${it.title.trim().lowercase()}_${it.artistName?.trim()?.lowercase()}" to it.id }
+            val existingArtistImageUrls = musicDao.getAllArtistsListRaw().associate { it.id to it.imageUrl }
+            val nextArtistId = AtomicLong((musicDao.getMaxArtistId() ?: 0L) + 1)
+            val delimiters = userPreferencesRepository.artistDelimitersFlow.first()
+
+            val songsToInsert = mutableListOf<SongEntity>()
+            val artistsToInsert = mutableMapOf<Long, ArtistEntity>() // Map to dedup by ID
+            val albumsToInsert = mutableMapOf<Long, AlbumEntity>()   // Map to dedup by ID
+            val crossRefsToInsert = mutableListOf<SongArtistCrossRef>()
+            
+            telegramSongs.forEach { tSong ->
+                val channelName = channels[tSong.chatId]?.title ?: "Telegram Stream"
+                // Synthetic negative ID for Song to check existence, but we want to merge metadata
+                // We use negative IDs for songs to definitively identify them as Telegram-sourced in the DB
+                // This prevents collision with MediaStore numeric IDs.
+                val songId = -(tSong.id.hashCode().toLong().absoluteValue)
+                val finalSongId = if (songId == 0L) -1L else songId
+                
+                // 2. Metadata Refinement (ID3 for Downloaded Files)
+                var realTitle = tSong.title
+                var realArtistName = tSong.artist
+                var realAlbumName = channelName
+                var realYear = 0
+                var realTrackNumber = 0
+                var realAlbumArtist = "Telegram"
+                
+                val file = java.io.File(tSong.filePath)
+                if (tSong.filePath.isNotEmpty() && file.exists()) {
+                     try {
+                        AudioMetadataReader.read(file)?.let { meta ->
+                            if (!meta.title.isNullOrBlank()) realTitle = meta.title
+                            if (!meta.artist.isNullOrBlank()) realArtistName = meta.artist
+                            if (!meta.album.isNullOrBlank()) {
+                                realAlbumName = meta.album
+                                realAlbumArtist = meta.albumArtist ?: realArtistName // Default to Song Artist if Album Artist missing
+                            }
+                            if (meta.trackNumber != null) realTrackNumber = meta.trackNumber
+                            if (meta.year != null) realYear = meta.year
+                        }
+                    } catch (e: Exception) {
+                        // Ignore read errors, fall back to TdApi metadata
+                    }
+                }
+                
+                // 3. Multi-Artist Processing
+                val rawArtistName = if (realArtistName.isBlank()) "Unknown Artist" else realArtistName
+                val splitArtists = rawArtistName.splitArtistsByDelimiters(delimiters)
+                
+                // Process Primary Artist (First in list)
+                val primaryArtistName = splitArtists.firstOrNull()?.trim() ?: "Unknown Artist"
+                
+                var primaryArtistId = -1L
+                
+                splitArtists.forEachIndexed { index, individualArtistName ->
+                    val cleanName = individualArtistName.trim()
+                    val lowerName = cleanName.lowercase()
+                    
+                    // Check if artist exists locally (Merge logic)
+                    val existingId = existingArtists[lowerName]
+                    
+                    val finalArtistId = if (existingId != null) {
+                        existingId // Use Positive MediaStore ID
+                    } else {
+                        // Generate consistent negative ID for Telegram-only artist
+                        val synthId = -(cleanName.hashCode().toLong().absoluteValue)
+                        if (synthId == 0L) -1L else synthId
+                    }
+
+                    if (index == 0) primaryArtistId = finalArtistId
+
+                    // Add to Artist Insert Map
+                    if (!artistsToInsert.containsKey(finalArtistId)) {
+                        artistsToInsert[finalArtistId] = ArtistEntity(
+                            id = finalArtistId,
+                            name = cleanName,
+                            trackCount = 0, // Will be recalculated by Room or logic
+                            imageUrl = existingArtistImageUrls[finalArtistId] // Keep existing image if merging
+                        )
+                    }
+
+                    // Add Cross Ref
+                    crossRefsToInsert.add(SongArtistCrossRef(
+                        songId = finalSongId,
+                        artistId = finalArtistId,
+                        isPrimary = (index == 0)
+                    ))
+                }
+
+                // 4. Album Logic
+                // Try to match existing album by Name + Album Artist
+                val albumKey = "${realAlbumName.trim().lowercase()}_${realAlbumArtist.trim().lowercase()}"
+                val existingAlbumId = existingAlbums[albumKey]
+                
+                val finalAlbumId = if (existingAlbumId != null) {
+                    existingAlbumId // Merge with local album
+                } else {
+                    // Synthetic negative ID
+                    val synthId = -(realAlbumName.hashCode().toLong().absoluteValue)
+                    if (synthId == 0L) -1L else synthId
+                }
+                
+                if (!albumsToInsert.containsKey(finalAlbumId)) {
+                     albumsToInsert[finalAlbumId] = AlbumEntity(
+                        id = finalAlbumId,
+                        title = realAlbumName,
+                        artistName = realAlbumArtist, 
+                        artistId = primaryArtistId, // Link to primary song artist (or album artist if we resolved it properly)
+                        songCount = 0,
+                        year = realYear,
+                        albumArtUriString = tSong.albumArtUriString // Use Telegram thumb or embedded art
+                    )
+                }
+
+                // 5. Build Final Song Entity
+                val songEntity = SongEntity(
+                    id = finalSongId,
+                    title = realTitle,
+                    artistName = rawArtistName, // Store full string for display
+                    artistId = primaryArtistId,
+                    albumName = realAlbumName,
+                    albumId = finalAlbumId,
+                    albumArtist = realAlbumArtist,
+                    duration = tSong.duration,
+                    contentUriString = "telegram://${tSong.chatId}/${tSong.messageId}",
+                    albumArtUriString = tSong.albumArtUriString,
+                    filePath = tSong.filePath,
+                    parentDirectoryPath = File(tSong.filePath).parent ?: "/Telegram/$channelName",
+                    dateAdded = tSong.dateAdded,
+                    genre = "Telegram",
+                    trackNumber = realTrackNumber,
+                    year = realYear,
+                    isFavorite = false,
+                    lyrics = null,
+                    mimeType = tSong.mimeType,
+                    bitrate = 0,
+                    sampleRate = 0
+                )
+                songsToInsert.add(songEntity)
+            }
+            
+            // Upsert into MusicDao
+            musicDao.incrementalSyncMusicData(
+                songs = songsToInsert,
+                albums = albumsToInsert.values.toList(),
+                artists = artistsToInsert.values.toList(),
+                crossRefs = crossRefsToInsert,
+                deletedSongIds = emptyList() // Do not delete anything here
+            )
+            Log.i(TAG, "Synced ${songsToInsert.size} Telegram songs with Unified Metadata.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to sync Telegram data", e)
+        }
     }
 }

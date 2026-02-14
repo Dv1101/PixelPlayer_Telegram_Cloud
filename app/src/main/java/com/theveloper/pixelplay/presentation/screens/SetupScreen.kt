@@ -268,6 +268,7 @@ fun SetupScreen(
                             }
                         },
                         onToggleAllowed = setupViewModel::toggleDirectoryAllowed,
+                        onSelectionFinished = setupViewModel::applyPendingDirectoryRuleChanges,
                         onStorageSelected = setupViewModel::selectStorage
                     )
                     SetupPage.NotificationsPermission -> NotificationsPermissionPage(uiState)
@@ -318,7 +319,8 @@ fun SetupScreen(
             initialRadius = uiState.navBarCornerRadius.toFloat(),
             onRadiusChange = { setupViewModel.setNavBarCornerRadius(it) },
             onDone = { showCornerRadiusOverlay = false },
-            onBack = { showCornerRadiusOverlay = false }
+            onBack = { showCornerRadiusOverlay = false },
+            isFullWidth = uiState.navBarStyle == "full_width"
         )
     }
 }
@@ -338,6 +340,7 @@ fun DirectorySelectionPage(
     onRefresh: () -> Unit,
     onSkip: () -> Unit,
     onToggleAllowed: (File) -> Unit,
+    onSelectionFinished: () -> Unit,
     onStorageSelected: (Int) -> Unit
 ) {
     var showDirectoryPicker by remember { mutableStateOf(false) }
@@ -393,8 +396,14 @@ fun DirectorySelectionPage(
         onToggleAllowed = onToggleAllowed,
         onRefresh = onRefresh,
         onStorageSelected = onStorageSelected,
-        onDone = { showDirectoryPicker = false },
-        onDismiss = { showDirectoryPicker = false }
+        onDone = {
+            onSelectionFinished()
+            showDirectoryPicker = false
+        },
+        onDismiss = {
+            onSelectionFinished()
+            showDirectoryPicker = false
+        }
     )
 }
 
@@ -1504,7 +1513,7 @@ fun NavBarLayoutPage(
                     }
                     
                     AnimatedVisibility(
-                        visible = isDefault,
+                        visible = true, // Always visible now
                         enter =   androidx.compose.animation.expandVertically() + fadeIn(),
                         exit = androidx.compose.animation.shrinkVertically() + fadeOut()
                     ) {
@@ -1632,7 +1641,18 @@ fun NavBarPreview(isDefault: Boolean) {
                                 .fillMaxWidth()
                                 .height(80.dp),
                             color = MaterialTheme.colorScheme.surfaceContainer,
-                            tonalElevation = 6.dp
+                            tonalElevation = 6.dp,
+                            // Simulated rounded top corners for preview if desired, or simplified
+                            shape = AbsoluteSmoothCornerShape(
+                                cornerRadiusTL = 28.dp, // Default preview radius
+                                smoothnessAsPercentTL = 60,
+                                cornerRadiusTR = 28.dp,
+                                smoothnessAsPercentTR = 60,
+                                cornerRadiusBL = 0.dp,
+                                smoothnessAsPercentBL = 60,
+                                cornerRadiusBR = 0.dp,
+                                smoothnessAsPercentBR = 60
+                            )
                         ) {
                              Row(
                                 modifier = Modifier.fillMaxSize(),

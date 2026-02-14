@@ -88,6 +88,7 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.media3.common.util.UnstableApi
 import androidx.navigation.NavHostController
@@ -100,10 +101,12 @@ import com.theveloper.pixelplay.presentation.navigation.Screen // Required for S
 import com.theveloper.pixelplay.presentation.screens.search.components.GenreCategoriesGrid
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistViewModel
 import kotlinx.collections.immutable.toImmutableList
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 import timber.log.Timber
+import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
 
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -125,10 +128,17 @@ fun SearchScreen(
     val currentFilter by remember { derivedStateOf { uiState.selectedSearchFilter } }
     val searchHistory = uiState.searchHistory
     val genres by playerViewModel.genres.collectAsState()
-    val stablePlayerState by playerViewModel.stablePlayerState.collectAsState()
+    val stablePlayerState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
     val favoriteSongIds by playerViewModel.favoriteSongIds.collectAsState()
     var showSongInfoBottomSheet by remember { mutableStateOf(false) }
     var selectedSongForInfo by remember { mutableStateOf<Song?>(null) }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        playerViewModel.searchNavDoubleTapEvents.collect {
+            active = true
+        }
+    }
 
     // Perform search whenever searchQuery, active state, or filter changes
     LaunchedEffect(searchQuery, active, currentFilter) {
@@ -173,8 +183,14 @@ fun SearchScreen(
 
     val colorScheme = MaterialTheme.colorScheme
 
-    LaunchedEffect(active) {
+    LaunchedEffect(active, keyboardController) {
         onSearchBarActiveChange(active)
+        if (active) {
+            delay(90L)
+            keyboardController?.show()
+        } else {
+            keyboardController?.hide()
+        }
     }
 
     DisposableEffect(Unit) {
@@ -485,7 +501,7 @@ fun SearchScreen(
 
                 PlaylistBottomSheet(
                     playlistUiState = playlistUiState,
-                    song = currentSong,
+                    songs = listOf(currentSong),
                     onDismiss = { showPlaylistBottomSheet = false },
                     bottomBarHeight = bottomBarHeightDp,
                     playerViewModel = playerViewModel,
@@ -639,7 +655,7 @@ fun SearchResultsList(
     navController: NavHostController
 ) {
     val localDensity = LocalDensity.current
-    val playerStableState by playerViewModel.stablePlayerState.collectAsState()
+    val playerStableState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
 
     if (results.isEmpty()) {
         Box(
