@@ -369,7 +369,7 @@ class DualPlayerEngine @Inject constructor(
             .setBufferDurationsMs(
                 30_000, // Min buffer 30s
                 60_000, // Max buffer 60s
-                2_500,  // Buffer for playback start (Increased from default to 2.5s)
+                5_000,  // Buffer for playback start (Increased from 2.5s for stability)
                 5_000   // Buffer for rebuffer (Increased to 5s to stop rapid cycling)
             )
             .build()
