@@ -242,6 +242,7 @@ interface MusicDao {
     @Query("""
         SELECT * FROM songs
         WHERE (:applyDirectoryFilter = 0 OR parent_directory_path IN (:allowedParentDirs))
+        AND (:filterMode = 0 OR (:filterMode = 1 AND telegram_file_id IS NULL) OR (:filterMode = 2 AND telegram_file_id IS NOT NULL))
         ORDER BY
             CASE WHEN :sortOrder = 'song_default_order' THEN track_number END ASC,
             CASE WHEN :sortOrder = 'song_title_az' THEN title END ASC,
@@ -257,7 +258,8 @@ interface MusicDao {
     fun getSongsPaginated(
         allowedParentDirs: List<String>,
         applyDirectoryFilter: Boolean,
-        sortOrder: String
+        sortOrder: String,
+        filterMode: Int
     ): PagingSource<Int, SongEntity>
 
     // --- Paginated Favorites Queries ---
@@ -364,11 +366,13 @@ interface MusicDao {
         SELECT DISTINCT albums.* FROM albums
         INNER JOIN songs ON albums.id = songs.album_id
         WHERE (:applyDirectoryFilter = 0 OR songs.id < 0 OR songs.parent_directory_path IN (:allowedParentDirs))
+        AND (:filterMode = 0 OR (:filterMode = 1 AND songs.telegram_file_id IS NULL) OR (:filterMode = 2 AND songs.telegram_file_id IS NOT NULL))
         ORDER BY albums.title ASC
     """)
     fun getAlbums(
         allowedParentDirs: List<String>,
-        applyDirectoryFilter: Boolean
+        applyDirectoryFilter: Boolean,
+        filterMode: Int
     ): Flow<List<AlbumEntity>>
 
     @Query("SELECT * FROM albums WHERE id = :albumId")

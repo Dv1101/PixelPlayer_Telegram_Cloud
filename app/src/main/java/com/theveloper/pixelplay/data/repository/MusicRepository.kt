@@ -25,7 +25,7 @@ interface MusicRepository {
      * Returns paginated songs for efficient display of large libraries.
      * @return Flow of PagingData<Song> for use with LazyPagingItems.
      */
-    fun getPaginatedSongs(sortOption: com.theveloper.pixelplay.data.model.SortOption): Flow<PagingData<Song>>
+    fun getPaginatedSongs(sortOption: com.theveloper.pixelplay.data.model.SortOption, storageFilter: com.theveloper.pixelplay.data.model.StorageFilter): Flow<PagingData<Song>>
 
     /**
      * Returns paginated favorite songs for efficient display.
@@ -61,7 +61,7 @@ interface MusicRepository {
      * Obtiene la lista de álbumes filtrada.
      * @return Flow que emite una lista completa de objetos Album.
      */
-    fun getAlbums(): Flow<List<Album>> // Existing Flow for reactive updates
+    fun getAlbums(storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL): Flow<List<Album>> // Existing Flow for reactive updates
 
     /**
      * Obtiene la lista de artistas filtrada.
@@ -231,4 +231,6 @@ interface MusicRepository {
     suspend fun saveTelegramChannel(channel: TelegramChannelEntity)
     fun getAllTelegramChannels(): Flow<List<TelegramChannelEntity>>
     suspend fun deleteTelegramChannel(chatId: Long)
+    
+    val telegramRepository: com.theveloper.pixelplay.data.telegram.TelegramRepository
 }
