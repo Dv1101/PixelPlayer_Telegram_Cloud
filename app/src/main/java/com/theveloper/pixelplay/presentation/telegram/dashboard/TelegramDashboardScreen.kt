@@ -429,28 +429,5 @@ fun ExpressiveEmptyState(
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        
-        Spacer(modifier = Modifier.height(40.dp))
-        
-        MediumExtendedFloatingActionButton(
-            onClick = onAdd,
-            text = { 
-                Text(
-                    "Add Channel",
-                    fontFamily = GoogleSansRounded,
-                    fontWeight = FontWeight.SemiBold
-                ) 
-            },
-            icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-            expanded = true,
-            shape = CircleShape,
-            modifier = Modifier.graphicsLayer {
-                scaleX = scale
-                scaleY = scale
-            },
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            interactionSource = interactionSource
-        )
     }
 }
