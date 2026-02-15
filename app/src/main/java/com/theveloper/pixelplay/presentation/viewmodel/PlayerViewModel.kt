@@ -90,6 +90,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -164,6 +165,9 @@ class PlayerViewModel @Inject constructor(
 
     private val _playerUiState = MutableStateFlow(PlayerUiState())
     val playerUiState: StateFlow<PlayerUiState> = _playerUiState.asStateFlow()
+    
+    private val _showNoInternetDialog = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST)
+    val showNoInternetDialog: SharedFlow<Unit> = _showNoInternetDialog.asSharedFlow()
 
     val stablePlayerState: StateFlow<StablePlayerState> = playbackStateHolder.stablePlayerState
     /**
@@ -220,6 +224,13 @@ class PlayerViewModel @Inject constructor(
             telegramCacheManager.embeddedArtUpdated.collect { updatedArtUri ->
                 refreshArtwork(updatedArtUri)
             }
+        }
+        
+        launch {
+             connectivityStateHolder.offlinePlaybackBlocked.collect {
+                 Timber.w("Received offline blocked event. Showing dialog.")
+                 _showNoInternetDialog.emit(Unit)
+             }
         }
         
         launch {
@@ -468,7 +479,40 @@ class PlayerViewModel @Inject constructor(
     val artistNavigationRequests = _artistNavigationRequests.asSharedFlow()
     private val _searchNavDoubleTapEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
     val searchNavDoubleTapEvents = _searchNavDoubleTapEvents.asSharedFlow()
+    
+    // New event for scrolling to a specific index in the songs list
+    private val _scrollToIndexEvent = MutableSharedFlow<Int>(extraBufferCapacity = 1)
+    val scrollToIndexEvent = _scrollToIndexEvent.asSharedFlow()
+    
     private var artistNavigationJob: Job? = null
+
+    fun requestLocateCurrentSong() {
+        val currentSongId = stablePlayerState.value.currentSong?.id ?: return
+        val currentIdLong = currentSongId.toLongOrNull() ?: return // Telegram songs with negative IDs are also Longs
+        
+        viewModelScope.launch {
+            try {
+                // Get current sort option and filter from UI state
+                val sortOption = playerUiState.value.currentSongSortOption
+                val storageFilter = playerUiState.value.currentStorageFilter
+                
+                // Fetch sorted IDs from DB
+                val sortedIds = musicRepository.getSongIdsSorted(sortOption, storageFilter)
+                
+                // Find index
+                val index = sortedIds.indexOf(currentIdLong)
+                
+                if (index != -1) {
+                    _scrollToIndexEvent.emit(index)
+                } else {
+                    sendToast("Song not found in current list")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to locate current song")
+                sendToast("Could not locate song")
+            }
+        }
+    }
 
     val castRoutes: StateFlow<List<MediaRouter.RouteInfo>> = castStateHolder.castRoutes
     val selectedRoute: StateFlow<MediaRouter.RouteInfo?> = castStateHolder.selectedRoute
@@ -1825,10 +1869,9 @@ class PlayerViewModel @Inject constructor(
                 }
                 _playerUiState.update { it.copy(currentPosition = initialPosition) }
                 viewModelScope.launch {
-                    song.albumArtUriString?.toUri()?.let { uri ->
-                        val currentUri = playbackStateHolder.stablePlayerState.value.currentSong?.albumArtUriString
-                        themeStateHolder.extractAndGenerateColorScheme(uri, currentUri)
-                    }
+                    val uri = song.albumArtUriString?.toUri()
+                    val currentUri = playbackStateHolder.stablePlayerState.value.currentSong?.albumArtUriString
+                    themeStateHolder.extractAndGenerateColorScheme(uri, currentUri)
                 }
                 listeningStatsTracker.onSongChanged(
                     song = song,
@@ -1915,6 +1958,22 @@ class PlayerViewModel @Inject constructor(
                     mediaItem?.let { transitionedItem ->
                         listeningStatsTracker.finalizeCurrentSession()
                         val song = resolveSongFromMediaItem(transitionedItem)
+                        
+                        // Offline check for Telegram songs
+                        if (song?.contentUriString?.startsWith("telegram:") == true) {
+                            val isOnline = connectivityStateHolder.isOnline.value
+                            if (!isOnline) {
+                                val fileId = song.telegramFileId
+                                if (fileId != null) {
+                                    val isCached = musicRepository.telegramRepository.isFileCached(fileId)
+                                    if (!isCached) {
+                                        playerCtrl.pause()
+                                        _showNoInternetDialog.emit(Unit)
+                                    }
+                                }
+                            }
+                        }
+
                         val resolvedDuration = if (song != null) {
                             playbackStateHolder.resolveDurationForPlaybackState(
                                 reportedDurationMs = playerCtrl.duration,
@@ -1944,10 +2003,9 @@ class PlayerViewModel @Inject constructor(
                                 isPlaying = playerCtrl.isPlaying
                             )
                             viewModelScope.launch {
-                                currentSongValue.albumArtUriString?.toUri()?.let { uri ->
-                                    val currentUri = playbackStateHolder.stablePlayerState.value.currentSong?.albumArtUriString
-                                    themeStateHolder.extractAndGenerateColorScheme(uri, currentUri)
-                                }
+                                val uri = currentSongValue.albumArtUriString?.toUri()
+                                val currentUri = playbackStateHolder.stablePlayerState.value.currentSong?.albumArtUriString
+                                themeStateHolder.extractAndGenerateColorScheme(uri, currentUri)
                             }
                             loadLyricsForCurrentSong()
                         }
@@ -2044,20 +2102,9 @@ class PlayerViewModel @Inject constructor(
             transitionSchedulerJob?.cancel()
 
             // Validate songs - filter out any with missing files (efficient: uses contentUri check)
-            val validSongs = songsToPlay.filter { song ->
-                try {
-                    val uri = song.contentUriString.toUri()
-                    if (song.contentUriString.startsWith("telegram://")) {
-                        true // Telegram URIs are handled by our proxy/engine
-                    } else {
-                        // Use ContentResolver to check if URI is still valid (more efficient than File check)
-                        context.contentResolver.openInputStream(uri)?.use { true } ?: false
-                    }
-                } catch (e: Exception) {
-                    Timber.w("Song file missing or inaccessible: ${song.title}")
-                    false
-                }
-            }
+            // Validate songs - filter out any with missing files (efficient: uses contentUri check)
+            // Strict validation removed to prevent skipping valid songs that might fail openInputStream check
+            val validSongs = songsToPlay
 
             if (validSongs.isEmpty()) {
                 _toastEvents.emit(context.getString(R.string.no_valid_songs))
@@ -2067,6 +2114,26 @@ class PlayerViewModel @Inject constructor(
             // Adjust startSong if it was filtered out
             val validStartSong =
                 validSongs.firstOrNull { it.id == startSong.id } ?: validSongs.first()
+
+            // Offline check for the starting song if it is a Telegram song
+            if (validStartSong.contentUriString.startsWith("telegram:")) {
+                val isOnline = connectivityStateHolder.isOnline.value
+                val fileId = validStartSong.telegramFileId
+                
+                Timber.d("Offline Check: fileId=$fileId, contentUri=${validStartSong.contentUriString}, isOnline=$isOnline")
+
+                if (!isOnline) {
+                     if (fileId != null) {
+                         val isCached = musicRepository.telegramRepository.isFileCached(fileId)
+                         Timber.d("Offline Check: isCached=$isCached")
+                         if (!isCached) {
+                             Timber.w("Blocked playback: Offline and not cached.")
+                             _showNoInternetDialog.tryEmit(Unit)
+                             return@launch
+                         }
+                     }
+                }
+            }
 
             // Store the original order so we can "unshuffle" later if the user turns shuffle off
             queueStateHolder.setOriginalQueueOrder(validSongs)
@@ -2102,9 +2169,14 @@ class PlayerViewModel @Inject constructor(
     }
 
     // Start playback with shuffle enabled in one coroutine to avoid racing queue updates
-    fun playSongsShuffled(songsToPlay: List<Song>, queueName: String = "None", playlistId: String? = null) {
+    fun playSongsShuffled(
+        songsToPlay: List<Song>, 
+        queueName: String = "None", 
+        playlistId: String? = null,
+        startAtZero: Boolean = false
+    ) {
         viewModelScope.launch {
-            val result = queueStateHolder.prepareShuffledQueueSuspending(songsToPlay, queueName)
+            val result = queueStateHolder.prepareShuffledQueueSuspending(songsToPlay, queueName, startAtZero)
             if (result == null) {
                 sendToast("No songs to shuffle.")
                 return@launch

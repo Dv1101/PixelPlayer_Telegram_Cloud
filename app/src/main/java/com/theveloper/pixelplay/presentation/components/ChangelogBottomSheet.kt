@@ -61,8 +61,8 @@ data class ChangelogVersion(
 // The changelog data
 val changelog = listOf(
     ChangelogVersion(
-        version = "0.5.0-beta",
-        date = "2026-01-14",
+        version = "0.6.0-beta",
+        date = "2026-02-14",
         sections = listOf(
             ChangelogSection(
                 title = "Highlights",

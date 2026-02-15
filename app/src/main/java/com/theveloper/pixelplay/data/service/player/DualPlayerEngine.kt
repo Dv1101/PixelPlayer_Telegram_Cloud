@@ -58,7 +58,8 @@ class DualPlayerEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val telegramRepository: TelegramRepository,
     private val telegramStreamProxy: com.theveloper.pixelplay.data.telegram.TelegramStreamProxy,
-    private val telegramCacheManager: com.theveloper.pixelplay.data.telegram.TelegramCacheManager
+    private val telegramCacheManager: com.theveloper.pixelplay.data.telegram.TelegramCacheManager,
+    private val connectivityStateHolder: com.theveloper.pixelplay.presentation.viewmodel.ConnectivityStateHolder
 ) {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var transitionJob: Job? = null
@@ -115,9 +116,17 @@ class DualPlayerEngine @Inject constructor(
                 }
             }
         }
-        
+
+        override fun onAudioSessionIdChanged(audioSessionId: Int) {
+            // Integración de test/telegram-streaming-integration
+            if (audioSessionId != 0 && _activeAudioSessionId.value != audioSessionId) {
+                _activeAudioSessionId.value = audioSessionId
+                Timber.tag("TransitionDebug").d("Master audio session changed: %d", audioSessionId)
+            }
+        }
+
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            // Track Telegram file for cache management
+            // Integración de feature/telegram-cloud-sync
             val uri = mediaItem?.localConfiguration?.uri
             if (uri?.scheme == "telegram") {
                 scope.launch {
@@ -126,21 +135,19 @@ class DualPlayerEngine @Inject constructor(
                     telegramCacheManager.setActivePlayback(fileId)
                     Timber.tag("DualPlayerEngine").d("Telegram playback active: fileId=$fileId")
                 }
-                // Telegram streaming needs Network Lock to prevent buffering/stuttering
+                // Telegram streaming necesita Wake Mode para evitar cortes
                 (playerA as? ExoPlayer)?.setWakeMode(C.WAKE_MODE_LOCAL)
             } else {
-                // Non-Telegram song - clean up any previous Telegram file
+                // Limpieza para canciones que no son de Telegram
                 telegramCacheManager.setActivePlayback(null)
-                // Local files don't need Wifi Lock - save battery/heat
-                 (playerA as? ExoPlayer)?.setWakeMode(C.WAKE_MODE_LOCAL)
+                (playerA as? ExoPlayer)?.setWakeMode(C.WAKE_MODE_LOCAL)
             }
 
-            // --- Pre-Resolve Next/Prev Tracks for Performance ---
+            // --- Pre-Resolve Next/Prev Tracks para Performance ---
             try {
-                // Use the current master player (playerA)
                 val currentIndex = playerA.currentMediaItemIndex
                 if (currentIndex != C.INDEX_UNSET) {
-                    // 1. Pre-resolve NEXT track
+                    // 1. Pre-resolver SIGUIENTE
                     if (currentIndex + 1 < playerA.mediaItemCount) {
                         val nextItem = playerA.getMediaItemAt(currentIndex + 1)
                         val nextUri = nextItem.localConfiguration?.uri
@@ -148,7 +155,7 @@ class DualPlayerEngine @Inject constructor(
                             telegramRepository.preResolveTelegramUri(nextUri.toString())
                         }
                     }
-                    // 2. Pre-resolve PREVIOUS track (for back button speed)
+                    // 2. Pre-resolver ANTERIOR (para rapidez al retroceder)
                     if (currentIndex - 1 >= 0) {
                         val prevItem = playerA.getMediaItemAt(currentIndex - 1)
                         val prevUri = prevItem.localConfiguration?.uri
@@ -158,7 +165,6 @@ class DualPlayerEngine @Inject constructor(
                     }
                 }
             } catch (e: Exception) {
-                // Safeguard against any index/player state issues
                 Timber.w(e, "Error during pre-resolution in onMediaItemTransition")
             }
         }
@@ -332,6 +338,15 @@ class DualPlayerEngine @Inject constructor(
                          if (fileInfo?.local?.isDownloadingCompleted == true && fileInfo.local.path.isNotEmpty()) {
                               Timber.tag("DualPlayerEngine").d("File $fileId is downloaded. Using direct file playback.")
                               return dataSpec.buildUpon().setUri(android.net.Uri.fromFile(java.io.File(fileInfo.local.path))).build()
+                         }
+
+                         // Not cached locally. Check connectivity.
+                         val isOnline = connectivityStateHolder.isOnline.value
+                         if (!isOnline) {
+                             Timber.tag("DualPlayerEngine").w("Blocked playback: Offline and not cached (fileId=$fileId). Triggering UI event.")
+                             connectivityStateHolder.triggerOfflineBlockedEvent()
+                             // Return original to let it fail or handled by error propagation.
+                             return dataSpec
                          }
 
                          Timber.tag("DualPlayerEngine").d("File $fileId not downloaded or Check failed. Using StreamProxy.")

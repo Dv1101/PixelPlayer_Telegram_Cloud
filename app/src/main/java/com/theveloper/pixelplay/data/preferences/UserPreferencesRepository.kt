@@ -134,6 +134,7 @@ constructor(
         val FULL_PLAYER_PLACEHOLDERS = booleanPreferencesKey("full_player_placeholders")
         val FULL_PLAYER_PLACEHOLDER_TRANSPARENT = booleanPreferencesKey("full_player_placeholder_transparent")
         val FULL_PLAYER_PLACEHOLDERS_ON_CLOSE = booleanPreferencesKey("full_player_placeholders_on_close")
+        val FULL_PLAYER_SWITCH_ON_DRAG_RELEASE = booleanPreferencesKey("full_player_switch_on_drag_release")
         val FULL_PLAYER_DELAY_THRESHOLD = intPreferencesKey("full_player_delay_threshold_percent")
         val FULL_PLAYER_CLOSE_THRESHOLD = intPreferencesKey("full_player_close_threshold_percent")
         val USE_PLAYER_SHEET_V2 = booleanPreferencesKey("use_player_sheet_v2")
@@ -244,7 +245,7 @@ constructor(
 
     val loudnessEnhancerStrengthFlow: Flow<Int> =
         dataStore.data.map { preferences ->
-            preferences[PreferencesKeys.LOUDNESS_ENHANCER_STRENGTH] ?: 0
+            (preferences[PreferencesKeys.LOUDNESS_ENHANCER_STRENGTH] ?: 0).coerceIn(0, 1000)
         }
 
     suspend fun setLoudnessEnhancerEnabled(enabled: Boolean) {
@@ -252,7 +253,9 @@ constructor(
     }
 
     suspend fun setLoudnessEnhancerStrength(strength: Int) {
-        dataStore.edit { preferences -> preferences[PreferencesKeys.LOUDNESS_ENHANCER_STRENGTH] = strength }
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.LOUDNESS_ENHANCER_STRENGTH] = strength.coerceIn(0, 1000)
+        }
     }
 
     // Dismissed Warning Flows & Setters
@@ -773,6 +776,7 @@ constructor(
                 showPlaceholders = preferences[PreferencesKeys.FULL_PLAYER_PLACEHOLDERS] ?: true,
                 transparentPlaceholders = preferences[PreferencesKeys.FULL_PLAYER_PLACEHOLDER_TRANSPARENT] ?: false,
                 applyPlaceholdersOnClose = preferences[PreferencesKeys.FULL_PLAYER_PLACEHOLDERS_ON_CLOSE] ?: false,
+                switchOnDragRelease = preferences[PreferencesKeys.FULL_PLAYER_SWITCH_ON_DRAG_RELEASE] ?: true,
                 contentAppearThresholdPercent = preferences[PreferencesKeys.FULL_PLAYER_DELAY_THRESHOLD] ?: 98,
                 contentCloseThresholdPercent = preferences[PreferencesKeys.FULL_PLAYER_CLOSE_THRESHOLD] ?: 0
             )
@@ -780,7 +784,7 @@ constructor(
 
     val usePlayerSheetV2Flow: Flow<Boolean> = dataStore.data
         .map { preferences ->
-            preferences[PreferencesKeys.USE_PLAYER_SHEET_V2] ?: false
+            preferences[PreferencesKeys.USE_PLAYER_SHEET_V2] ?: true
         }
 
     val favoriteSongIdsFlow: Flow<Set<String>> =
@@ -1439,6 +1443,12 @@ constructor(
         }
     }
 
+    suspend fun setFullPlayerSwitchOnDragRelease(enabled: Boolean) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.FULL_PLAYER_SWITCH_ON_DRAG_RELEASE] = enabled
+        }
+    }
+
     suspend fun setFullPlayerAppearThreshold(thresholdPercent: Int) {
         val coercedValue = thresholdPercent.coerceIn(0, 100)
         dataStore.edit { preferences ->
@@ -1581,18 +1591,28 @@ constructor(
                 val stored = preferences[PreferencesKeys.EQUALIZER_CUSTOM_BANDS]
                 if (stored != null) {
                     try {
-                        json.decodeFromString<List<Int>>(stored)
+                        val decoded = json.decodeFromString<List<Int>>(stored)
+                        when {
+                            decoded.size >= 10 -> decoded.take(10)
+                            decoded.isEmpty() -> List(10) { 0 }
+                            else -> decoded + List(10 - decoded.size) { 0 }
+                        }
                     } catch (e: Exception) {
-                        listOf(0, 0, 0, 0, 0)
+                        List(10) { 0 }
                     }
                 } else {
-                    listOf(0, 0, 0, 0, 0)
+                    List(10) { 0 }
                 }
             }
 
     suspend fun setEqualizerCustomBands(bands: List<Int>) {
         dataStore.edit { preferences ->
-            preferences[PreferencesKeys.EQUALIZER_CUSTOM_BANDS] = json.encodeToString(bands)
+            val normalized = when {
+                bands.size >= 10 -> bands.take(10)
+                bands.isEmpty() -> List(10) { 0 }
+                else -> bands + List(10 - bands.size) { 0 }
+            }
+            preferences[PreferencesKeys.EQUALIZER_CUSTOM_BANDS] = json.encodeToString(normalized)
         }
     }
 
