@@ -20,6 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import org.drinkless.tdlib.TdApi
 import java.io.File
 import java.io.RandomAccessFile
@@ -151,7 +152,7 @@ class TelegramStreamProxy @Inject constructor(
                         val raf = RandomAccessFile(file, "r")
                         try {
                             var currentPos = start
-                            val buffer = ByteArray(64 * 1024) // Increased to 64KB for smoother streaming
+                            val buffer = ByteArray(128 * 1024) // Increased to 128KB for smoother streaming
                             var noDataCount = 0
                             
                             raf.seek(currentPos)
@@ -159,6 +160,9 @@ class TelegramStreamProxy @Inject constructor(
                             var cachedDownloadedPrefixSize = fileInfo?.local?.downloadedPrefixSize?.toLong() ?: 0L
 
                             while (true) {
+                                // Yield to allow other coroutines to run (reduces CPU contention/heat)
+                                yield()
+                                
                                 // 1. Check if we've reached the end of the requested range
                                 val remaining = end - currentPos + 1
                                 if (remaining <= 0) break

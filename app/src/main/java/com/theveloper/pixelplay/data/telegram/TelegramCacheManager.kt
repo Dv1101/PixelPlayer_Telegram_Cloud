@@ -82,16 +82,22 @@ class TelegramCacheManager @Inject constructor(
      * Mark a file as currently being played.
      * This prevents it from being cleaned up.
      */
-    // LRU Cache for audio files to keep recent songs (Buffer of ~5 songs)
+    // LRU Cache for audio files to keep recent songs (Buffer of ~2 songs)
     // This allows "Previous" / "Next" navigation without re-downloading, while keeping storage low.
     private val audioFileHistory = java.util.Collections.synchronizedList(java.util.LinkedList<Int>())
-    private val HISTORY_CACHE_LIMIT = 5 
+    private val HISTORY_CACHE_LIMIT = 2
 
     /**
      * Mark a file as currently being played and manage the rolling cache.
      */
     fun setActivePlayback(fileId: Int?) {
         if (fileId == null) return
+        
+        // Trigger storage optimization periodically when playback changes
+        // This helps keep the overall TDLib cache size under control
+        scope.launch {
+            runStorageOptimization()
+        }
         
         // LRU Logic: Move to end (most recent)
         synchronized(audioFileHistory) {
@@ -270,5 +276,39 @@ class TelegramCacheManager @Inject constructor(
         clearTdLibCache()
         
         Timber.d("TelegramCacheManager: All Telegram cache cleared")
+    }
+
+    /**
+     * Aggressively optimize storage to keep cache size small.
+     * This is called periodically during playback.
+     */
+     private suspend fun runStorageOptimization() {
+        try {
+            // OptimizeStorage parameters:
+            // - size: Maximum size of TDLib files (200MB limit for general cache)
+            // - ttl: Time to live in seconds (3 days = 259200s)
+            // - count: Maximum file count (50 files)
+            // - immunityDelay: Don't delete files accessed recently (30 seconds)
+            // - fileTypes: Which file types to optimize (null = all)
+            // - chatIds: Which chats to optimize (null = all)
+            // - excludeChatIds: Chats to exclude (null = none)
+            // - returnDeletedFileStatistics: Return stats
+            // - chatLimit: Max number of chats (0 = all)
+            
+            // We use a relatively small count limit to prevent thousands of small files accumulating
+            val result = telegramClientManager.sendRequest<TdApi.StorageStatistics>(
+                TdApi.OptimizeStorage(
+                    200 * 1024 * 1024L, // 200MB soft limit for total cache
+                    259200,             // 3 days TTL
+                    50,                 // Max 50 files total (includes photos, voice notes etc)
+                    30,                 // Protect files accessed in last 30s
+                    null, null, null, false, 0
+                )
+            )
+            Timber.d("TelegramCacheManager: Optimized storage. Stats: ${result.size} bytes in ${result.count} files")
+        } catch (e: Exception) {
+            // Optimization might fail if busy, just log warning
+            Timber.w("TelegramCacheManager: Storage optimization skipped/failed: ${e.message}")
+        }
     }
 }
