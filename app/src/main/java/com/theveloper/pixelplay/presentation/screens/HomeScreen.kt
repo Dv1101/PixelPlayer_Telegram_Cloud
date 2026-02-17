@@ -1,5 +1,6 @@
 package com.theveloper.pixelplay.presentation.screens
 
+import android.content.Intent
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -63,6 +64,7 @@ import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.presentation.components.AlbumArtCollage
 import com.theveloper.pixelplay.presentation.components.BetaInfoBottomSheet
 import com.theveloper.pixelplay.presentation.components.ChangelogBottomSheet
+import com.theveloper.pixelplay.presentation.netease.dashboard.NeteaseDashboardViewModel
 import com.theveloper.pixelplay.presentation.components.DailyMixSection
 import com.theveloper.pixelplay.presentation.components.HomeGradientTopBar
 import com.theveloper.pixelplay.presentation.components.HomeOptionsBottomSheet
@@ -75,6 +77,8 @@ import com.theveloper.pixelplay.presentation.components.StatsOverviewCard
 import com.theveloper.pixelplay.presentation.model.mapRecentlyPlayedSongs
 import com.theveloper.pixelplay.presentation.components.subcomps.PlayingEqIcon
 import com.theveloper.pixelplay.presentation.navigation.Screen
+import com.theveloper.pixelplay.presentation.components.StreamingProviderSheet
+import com.theveloper.pixelplay.presentation.telegram.auth.TelegramLoginActivity
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.SettingsViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.StatsViewModel
@@ -94,6 +98,7 @@ fun HomeScreen(
     paddingValuesParent: PaddingValues,
     playerViewModel: PlayerViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel(),
+    neteaseViewModel: NeteaseDashboardViewModel = hiltViewModel(),
     onOpenSidebar: () -> Unit
 ) {
     val context = LocalContext.current
@@ -151,6 +156,7 @@ fun HomeScreen(
     var showOptionsBottomSheet by remember { mutableStateOf(false) }
     var showChangelogBottomSheet by remember { mutableStateOf(false) }
     var showBetaInfoBottomSheet by remember { mutableStateOf(false) }
+    var showStreamingProviderSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState()
     val betaSheetState = rememberModalBottomSheetState()
     val scope = rememberCoroutineScope()
@@ -178,8 +184,7 @@ fun HomeScreen(
                         showBetaInfoBottomSheet = true
                     },
                     onTelegramClick = {
-                         val intent = android.content.Intent(context, com.theveloper.pixelplay.presentation.telegram.auth.TelegramLoginActivity::class.java)
-                         context.startActivity(intent)
+                         showStreamingProviderSheet = true
                     },
                     onMenuClick = {
                         // onOpenSidebar() // Disabled
@@ -327,6 +332,16 @@ fun HomeScreen(
         ) {
             BetaInfoBottomSheet()
         }
+    }
+    if (showStreamingProviderSheet) {
+        val isNeteaseLoggedIn by neteaseViewModel.isLoggedIn.collectAsState()
+        StreamingProviderSheet(
+            onDismissRequest = { showStreamingProviderSheet = false },
+            isNeteaseLoggedIn = isNeteaseLoggedIn,
+            onNavigateToNeteaseDashboard = {
+                navController.navigate(Screen.NeteaseDashboard.route)
+            }
+        )
     }
 }
 

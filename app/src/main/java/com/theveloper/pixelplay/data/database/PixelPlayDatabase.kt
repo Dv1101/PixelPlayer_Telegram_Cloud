@@ -18,9 +18,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         TelegramChannelEntity::class,
         SongEngagementEntity::class,
         FavoritesEntity::class,
-        LyricsEntity::class
+        LyricsEntity::class,
+        NeteaseSongEntity::class,
+        NeteasePlaylistEntity::class
     ],
-    version = 19, // Incremented for combined updates
+    version = 21, // Incremented for Netease Cloud Music tables
 
     exportSchema = false
 )
@@ -32,9 +34,23 @@ abstract class PixelPlayDatabase : RoomDatabase() {
     abstract fun telegramDao(): TelegramDao
     abstract fun engagementDao(): EngagementDao
     abstract fun favoritesDao(): FavoritesDao
-    abstract fun lyricsDao(): LyricsDao // Added FavoritesDao
+    abstract fun lyricsDao(): LyricsDao
+    abstract fun neteaseDao(): NeteaseDao
 
     companion object {
+        // Gap-bridging no-op migrations for missing version ranges.
+        // These versions predate Telegram features; affected tables have since been
+        // recreated by later migrations (e.g. 15→16 drops/recreates album_art_themes).
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) { /* no-op gap bridge */ }
+        }
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) { /* no-op gap bridge */ }
+        }
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) { /* no-op gap bridge */ }
+        }
+
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE songs ADD COLUMN parent_directory_path TEXT NOT NULL DEFAULT ''")
@@ -304,6 +320,81 @@ abstract class PixelPlayDatabase : RoomDatabase() {
 
                 // The table is a cache; wipe stale rows so we always regenerate with full token data.
                 database.execSQL("DELETE FROM album_art_themes")
+            }
+        }
+
+        /**
+         * Reconcile Telegram tables: drop and recreate to match current entity definitions.
+         * Telegram data is re-syncable cache, so this is safe.
+         */
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Drop existing Telegram tables that may have schema drift
+                db.execSQL("DROP TABLE IF EXISTS telegram_songs")
+                db.execSQL("DROP TABLE IF EXISTS telegram_channels")
+
+                // Recreate telegram_songs matching TelegramSongEntity exactly
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS telegram_songs (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        chat_id INTEGER NOT NULL,
+                        message_id INTEGER NOT NULL,
+                        file_id INTEGER NOT NULL,
+                        title TEXT NOT NULL,
+                        artist TEXT NOT NULL,
+                        duration INTEGER NOT NULL,
+                        file_path TEXT NOT NULL,
+                        mime_type TEXT NOT NULL,
+                        date_added INTEGER NOT NULL,
+                        album_art_uri TEXT
+                    )
+                """.trimIndent())
+
+                // Recreate telegram_channels matching TelegramChannelEntity exactly
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS telegram_channels (
+                        chat_id INTEGER NOT NULL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        username TEXT,
+                        song_count INTEGER NOT NULL DEFAULT 0,
+                        last_sync_time INTEGER NOT NULL DEFAULT 0,
+                        photo_path TEXT
+                    )
+                """.trimIndent())
+            }
+        }
+
+        /**
+         * Add Netease Cloud Music tables.
+         */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS netease_songs (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        netease_id INTEGER NOT NULL,
+                        playlist_id INTEGER NOT NULL,
+                        title TEXT NOT NULL,
+                        artist TEXT NOT NULL,
+                        album TEXT NOT NULL,
+                        album_id INTEGER NOT NULL,
+                        duration INTEGER NOT NULL,
+                        album_art_url TEXT,
+                        mime_type TEXT NOT NULL,
+                        bitrate INTEGER,
+                        date_added INTEGER NOT NULL
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS netease_playlists (
+                        id INTEGER NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        cover_url TEXT,
+                        song_count INTEGER NOT NULL,
+                        last_sync_time INTEGER NOT NULL
+                    )
+                """.trimIndent())
             }
         }
     }

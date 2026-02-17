@@ -23,6 +23,7 @@ import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
 import com.theveloper.pixelplay.data.preferences.dataStore
 import com.theveloper.pixelplay.data.media.SongMetadataEditor
 import com.theveloper.pixelplay.data.network.deezer.DeezerApiService
+import com.theveloper.pixelplay.data.network.netease.NeteaseApiService
 import com.theveloper.pixelplay.data.network.lyrics.LrcLibApiService
 import com.theveloper.pixelplay.data.repository.ArtistImageRepository
 import com.theveloper.pixelplay.data.repository.LyricsRepository
@@ -61,6 +62,12 @@ object AppModule {
 
     @Singleton
     @Provides
+    fun provideGson(): com.google.gson.Gson {
+        return com.google.gson.Gson()
+    }
+
+    @Singleton
+    @Provides
     fun provideSessionToken(@ApplicationContext context: Context): androidx.media3.session.SessionToken {
         return androidx.media3.session.SessionToken(
             context,
@@ -94,7 +101,10 @@ object AppModule {
         ).addMigrations(
             PixelPlayDatabase.MIGRATION_3_4,
             PixelPlayDatabase.MIGRATION_4_5,
+            PixelPlayDatabase.MIGRATION_5_6,
             PixelPlayDatabase.MIGRATION_6_7,
+            PixelPlayDatabase.MIGRATION_7_8,
+            PixelPlayDatabase.MIGRATION_8_9,
             PixelPlayDatabase.MIGRATION_9_10,
             PixelPlayDatabase.MIGRATION_10_11,
             PixelPlayDatabase.MIGRATION_11_12,
@@ -104,7 +114,9 @@ object AppModule {
             PixelPlayDatabase.MIGRATION_15_16,
             PixelPlayDatabase.MIGRATION_16_17,
             PixelPlayDatabase.MIGRATION_17_18,
-            PixelPlayDatabase.MIGRATION_18_19
+            PixelPlayDatabase.MIGRATION_18_19,
+            PixelPlayDatabase.MIGRATION_19_20,
+            PixelPlayDatabase.MIGRATION_20_21
         )
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
@@ -211,6 +223,12 @@ object AppModule {
     @Provides
     fun provideTelegramDao(database: PixelPlayDatabase): com.theveloper.pixelplay.data.database.TelegramDao {
         return database.telegramDao()
+    }
+
+    @Singleton
+    @Provides
+    fun provideNeteaseDao(database: PixelPlayDatabase): com.theveloper.pixelplay.data.database.NeteaseDao {
+        return database.neteaseDao()
     }
 
     @Provides
@@ -370,11 +388,49 @@ object AppModule {
                 okhttp3.ConnectionSpec.COMPATIBLE_TLS,
                 okhttp3.ConnectionSpec.CLEARTEXT
             ))
-            .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-            .writeTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .writeTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
             // Enable built-in retry on connection failure
             .retryOnConnectionFailure(true)
+            // Custom retry interceptor for IOExceptions
+            .addInterceptor { chain ->
+                var request = chain.request()
+                var response: okhttp3.Response? = null
+                var lastException: java.io.IOException? = null
+                val maxRetries = 3
+
+                // Retry up to 3 times
+                for (attempt in 0..maxRetries) {
+                    try {
+                        response?.close()
+                        response = chain.proceed(request)
+                        // If successful or 404 (not found is a valid response), return
+                        if (response!!.isSuccessful || response!!.code == 404) {
+                            return@addInterceptor response!!
+                        }
+                        // If 429 (Too Many Requests), we might want to respect retry-after or backoff
+                        if (response!!.code == 429) {
+                             response?.close() // Close the failed response before retrying
+                             throw java.io.IOException("Rate limited (429)")
+                        }
+                    } catch (e: java.io.IOException) {
+                        lastException = e
+                        if (attempt < maxRetries) {
+                            // Exponential backoff: 500ms, 1000ms, 2000ms
+                            try {
+                                Thread.sleep((500L * (1L shl attempt)))
+                            } catch (e: InterruptedException) {
+                                Thread.currentThread().interrupt()
+                                throw java.io.InterruptedIOException("Interrupted during retry backoff")
+                            }
+                        }
+                    }
+                }
+                
+                // If we have a response, return it; otherwise throw the last exception
+                response ?: throw (lastException ?: java.io.IOException("Unknown network error after $maxRetries retries"))
+            }
             // Add headers
             .addInterceptor { chain ->
                 val originalRequest = chain.request()
@@ -445,3 +501,4 @@ object AppModule {
         return ArtistImageRepository(deezerApiService, musicDao)
     }
 }
+

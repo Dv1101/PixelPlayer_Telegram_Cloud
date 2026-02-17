@@ -47,6 +47,7 @@ import com.theveloper.pixelplay.data.model.SearchHistoryItem
 import com.theveloper.pixelplay.data.model.SearchResultItem
 import com.theveloper.pixelplay.data.model.SortOption
 import com.theveloper.pixelplay.data.model.FolderSource
+import com.theveloper.pixelplay.data.model.StorageFilter
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
 import com.theveloper.pixelplay.utils.DirectoryRuleResolver
 import com.theveloper.pixelplay.utils.LogUtils
@@ -147,16 +148,16 @@ class MusicRepositoryImpl @Inject constructor(
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    override fun getPaginatedFavoriteSongs(sortOption: SortOption): Flow<PagingData<Song>> {
-        return songRepository.getPaginatedFavoriteSongs(sortOption)
+    override fun getPaginatedFavoriteSongs(sortOption: SortOption, storageFilter: StorageFilter): Flow<PagingData<Song>> {
+        return songRepository.getPaginatedFavoriteSongs(sortOption, storageFilter)
     }
 
-    override suspend fun getFavoriteSongsOnce(): List<Song> {
-        return songRepository.getFavoriteSongsOnce()
+    override suspend fun getFavoriteSongsOnce(storageFilter: StorageFilter): List<Song> {
+        return songRepository.getFavoriteSongsOnce(storageFilter)
     }
 
-    override fun getFavoriteSongCountFlow(): Flow<Int> {
-        return songRepository.getFavoriteSongCountFlow()
+    override fun getFavoriteSongCountFlow(storageFilter: StorageFilter): Flow<Int> {
+        return songRepository.getFavoriteSongCountFlow(storageFilter)
     }
 
     override fun getSongCountFlow(): Flow<Int> {
@@ -201,8 +202,20 @@ class MusicRepositoryImpl @Inject constructor(
         return Pair(allowed, true)
     }
 
+    private fun StorageFilter.toFilterMode(): Int = when (this) {
+        StorageFilter.ALL -> 0
+        StorageFilter.OFFLINE -> 1
+        StorageFilter.ONLINE -> 2
+    }
+
+    private fun Song.matchesStorageFilter(filter: StorageFilter): Boolean = when (filter) {
+        StorageFilter.ALL -> true
+        StorageFilter.OFFLINE -> !contentUriString.startsWith("telegram://") && !contentUriString.startsWith("netease://")
+        StorageFilter.ONLINE -> contentUriString.startsWith("telegram://") || contentUriString.startsWith("netease://")
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
-    override fun getAlbums(storageFilter: com.theveloper.pixelplay.data.model.StorageFilter): Flow<List<Album>> {
+    override fun getAlbums(storageFilter: StorageFilter): Flow<List<Album>> {
         return combine(
             userPreferencesRepository.allowedDirectoriesFlow,
             userPreferencesRepository.blockedDirectoriesFlow
@@ -210,7 +223,7 @@ class MusicRepositoryImpl @Inject constructor(
             allowedDirs to blockedDirs
         }.flatMapLatest { (allowedDirs, blockedDirs) ->
             val (allowedParentDirs, applyFilter) = computeAllowedDirs(allowedDirs, blockedDirs)
-            musicDao.getAlbums(allowedParentDirs, applyFilter, storageFilter.value)
+            musicDao.getAlbums(allowedParentDirs, applyFilter, storageFilter.toFilterMode())
                 .map { entities -> entities.map { it.toAlbum() } }
         }.flowOn(Dispatchers.IO)
     }
@@ -220,7 +233,7 @@ class MusicRepositoryImpl @Inject constructor(
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    override fun getArtists(): Flow<List<Artist>> {
+    override fun getArtists(storageFilter: StorageFilter): Flow<List<Artist>> {
         return combine(
             userPreferencesRepository.allowedDirectoriesFlow,
             userPreferencesRepository.blockedDirectoriesFlow
@@ -228,7 +241,11 @@ class MusicRepositoryImpl @Inject constructor(
             allowedDirs to blockedDirs
         }.flatMapLatest { (allowedDirs, blockedDirs) ->
             val (allowedParentDirs, applyFilter) = computeAllowedDirs(allowedDirs, blockedDirs)
-            musicDao.getArtistsWithSongCountsFiltered(allowedParentDirs, applyFilter)
+            musicDao.getArtistsWithSongCountsFiltered(
+                allowedParentDirs = allowedParentDirs,
+                applyDirectoryFilter = applyFilter,
+                filterMode = storageFilter.toFilterMode()
+            )
                 .map { entities ->
                     val artists = entities.map { it.toArtist() }
                     // Trigger prefetch for missing images (fire-and-forget on existing scope)
@@ -566,7 +583,7 @@ class MusicRepositoryImpl @Inject constructor(
         lyricsRepository.resetAllLyrics()
     }
 
-    override fun getMusicFolders(): Flow<List<MusicFolder>> {
+    override fun getMusicFolders(storageFilter: StorageFilter): Flow<List<MusicFolder>> {
         return combine(
             getAudioFiles(),
             userPreferencesRepository.allowedDirectoriesFlow,
@@ -575,7 +592,7 @@ class MusicRepositoryImpl @Inject constructor(
             userPreferencesRepository.foldersSourceFlow
         ) { songs, allowedDirs, blockedDirs, isFolderFilterActive, folderSource ->
             folderTreeBuilder.buildFolderTree(
-                songs = songs,
+                songs = songs.filter { it.matchesStorageFilter(storageFilter) },
                 allowedDirs = allowedDirs,
                 blockedDirs = blockedDirs,
                 isFolderFilterActive = isFolderFilterActive,
@@ -613,6 +630,7 @@ class MusicRepositoryImpl @Inject constructor(
     }
 
     override suspend fun clearTelegramData() {
+        musicDao.clearAllTelegramSongs()
         telegramDao.clearAll()
         // Clear all Telegram caches (TDLib files, embedded art, memory)
         telegramRepository.clearMemoryCache()
@@ -628,6 +646,7 @@ class MusicRepositoryImpl @Inject constructor(
     }
 
     override suspend fun deleteTelegramChannel(chatId: Long) {
+        musicDao.clearTelegramSongsForChat(chatId)
         telegramDao.deleteSongsByChatId(chatId) // Cascade delete songs
         telegramDao.deleteChannel(chatId)
     }
@@ -640,13 +659,7 @@ class MusicRepositoryImpl @Inject constructor(
         val blockedDirsFlow = userPreferencesRepository.blockedDirectoriesFlow.first()
         val (allowedParentDirs, applyFilter) = computeAllowedDirs(allowedDirsFlow, blockedDirsFlow)
 
-        // Map StorageFilter to filterMode
-        // 0: All, 1: Local only (telegram_file_id IS NULL), 2: Telegram only (telegram_file_id IS NOT NULL)
-        val filterMode = when (storageFilter) {
-            com.theveloper.pixelplay.data.model.StorageFilter.ALL -> 0
-            com.theveloper.pixelplay.data.model.StorageFilter.OFFLINE -> 1
-            com.theveloper.pixelplay.data.model.StorageFilter.ONLINE -> 2
-        }
+        val filterMode = storageFilter.toFilterMode()
 
         musicDao.getSongIdsSorted(
             allowedParentDirs = allowedParentDirs,

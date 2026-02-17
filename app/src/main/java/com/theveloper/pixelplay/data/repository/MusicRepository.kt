@@ -31,17 +31,24 @@ interface MusicRepository {
      * Returns paginated favorite songs for efficient display.
      * @return Flow of PagingData<Song> for use with LazyPagingItems.
      */
-    fun getPaginatedFavoriteSongs(sortOption: com.theveloper.pixelplay.data.model.SortOption): Flow<PagingData<Song>>
+    fun getPaginatedFavoriteSongs(
+        sortOption: com.theveloper.pixelplay.data.model.SortOption,
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL
+    ): Flow<PagingData<Song>>
 
     /**
      * Returns all favorite songs as a list (for playback queue on shuffle).
      */
-    suspend fun getFavoriteSongsOnce(): List<Song>
+    suspend fun getFavoriteSongsOnce(
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL
+    ): List<Song>
 
     /**
      * Returns the count of favorite songs (reactive).
      */
-    fun getFavoriteSongCountFlow(): Flow<Int>
+    fun getFavoriteSongCountFlow(
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL
+    ): Flow<Int>
 
     /**
      * Returns the count of songs in the library.
@@ -67,7 +74,9 @@ interface MusicRepository {
      * Obtiene la lista de artistas filtrada.
      * @return Flow que emite una lista completa de objetos Artist.
      */
-    fun getArtists(): Flow<List<Artist>> // Existing Flow for reactive updates
+    fun getArtists(
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL
+    ): Flow<List<Artist>> // Existing Flow for reactive updates
 
     /**
      * Obtiene la lista completa de canciones una sola vez.
@@ -221,7 +230,9 @@ interface MusicRepository {
 
     suspend fun resetAllLyrics()
 
-    fun getMusicFolders(): Flow<List<com.theveloper.pixelplay.data.model.MusicFolder>>
+    fun getMusicFolders(
+        storageFilter: com.theveloper.pixelplay.data.model.StorageFilter = com.theveloper.pixelplay.data.model.StorageFilter.ALL
+    ): Flow<List<com.theveloper.pixelplay.data.model.MusicFolder>>
 
     suspend fun deleteById(id: Long)
     suspend fun saveTelegramSongs(songs: List<Song>)
