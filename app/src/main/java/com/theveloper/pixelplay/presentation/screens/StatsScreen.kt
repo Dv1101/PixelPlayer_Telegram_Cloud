@@ -107,6 +107,7 @@ import androidx.navigation.NavController
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.stats.PlaybackStatsRepository
 import com.theveloper.pixelplay.data.stats.StatsTimeRange
+import com.theveloper.pixelplay.presentation.components.CollapsibleCommonTopBar
 import com.theveloper.pixelplay.presentation.components.ExpressiveTopBarContent
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
 import com.theveloper.pixelplay.presentation.components.SmartImage
@@ -283,13 +284,21 @@ fun StatsScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .height(currentTopBarHeightDp + tabsHeight + tabIndicatorExtraSpacing + tabContentSpacing)
+                .zIndex(5f)
         ) {
-            Column {
-                StatsTopBar(
+            val solidAlpha = (collapseFraction * 2f).coerceIn(0f, 1f)
+            val backgroundColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = solidAlpha)
+            
+            Column(
+                modifier = Modifier
+                    .background(backgroundColor)
+            ) {
+                CollapsibleCommonTopBar(
+                    title = "Listening Stats",
                     collapseFraction = collapseFraction,
-                    height = currentTopBarHeightDp + 8.dp,
-                    onBackClick = { navController.popBackStack() }
+                    headerHeight = currentTopBarHeightDp, // Removed + 8.dp to reduce padding
+                    onBackClick = { navController.popBackStack() },
+                    containerColor = Color.Transparent
                 )
 
                 RangeTabsHeader(
@@ -312,50 +321,7 @@ fun StatsScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun StatsTopBar(
-    collapseFraction: Float,
-    height: Dp,
-    onBackClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(height)
-            .background(MaterialTheme.colorScheme.surface)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-        ) {
-            FilledIconButton(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(start = 12.dp, top = 8.dp)
-                    .zIndex(1f),
-                onClick = onBackClick,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                    contentColor = MaterialTheme.colorScheme.onSurface
-                )
-            ) {
-                Icon(imageVector = Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
-            }
-
-            ExpressiveTopBarContent(
-                title = "Listening Stats",
-                collapseFraction = collapseFraction,
-                modifier = Modifier.fillMaxSize(),
-                containerHeightRange = 80.dp to 56.dp,
-                expandedTitleStartPadding = 20.dp,
-                collapsedTitleStartPadding = 68.dp,
-                collapsedTitleVerticalBias = -0.4f
-            )
-        }
-    }
-}
+// StatsTopBar removed, replaced by CollapsibleCommonTopBar
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
