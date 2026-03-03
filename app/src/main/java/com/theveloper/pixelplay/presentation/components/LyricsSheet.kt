@@ -132,6 +132,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.text.style.TextGeometricTransform
 import androidx.compose.ui.text.style.TextOverflow
 import com.theveloper.pixelplay.presentation.components.subcomps.PlayingEqIcon
+import androidx.compose.ui.platform.LocalView
+import android.view.WindowManager
+import androidx.activity.ComponentActivity
+import android.content.Context
+import android.content.ContextWrapper
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -1030,6 +1035,12 @@ fun SyncedLyricsList(
 //            }
         }
     }
+}
+
+private tailrec fun Context.findActivity(): ComponentActivity? = when (this) {
+    is ComponentActivity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @OptIn(ExperimentalLayoutApi::class)
