@@ -7,6 +7,7 @@
 package com.theveloper.pixelplay.presentation.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.width
@@ -36,17 +38,19 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.PlaylistAdd
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilterChip
@@ -81,6 +85,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -356,6 +361,7 @@ private fun CreateAiPlaylistContent(
     var prioritizeFavorites by rememberSaveable { mutableStateOf(true) }
     var avoidExplicit by rememberSaveable { mutableStateOf(false) }
     var localError by rememberSaveable { mutableStateOf<String?>(null) }
+    val controlsEnabled = !isGenerating
 
     val moodOptions = remember {
         listOf("Chill", "Energetic", "Happy", "Dark", "Romantic", "Melancholic")
@@ -367,33 +373,19 @@ private fun CreateAiPlaylistContent(
         listOf("Any era", "70s", "80s", "90s", "2000s", "2010s", "2020s")
     }
 
-    val generatedPromptPreview = remember(
-        basePrompt,
-        selectedMood,
-        selectedActivity,
-        selectedEra,
-        includeGenres,
-        excludeGenres,
-        preferredLanguage,
-        energyLevel,
-        discoveryLevel,
-        prioritizeFavorites,
-        avoidExplicit
-    ) {
-        buildAiPlaylistPrompt(
-            basePrompt = basePrompt,
-            mood = selectedMood,
-            activity = selectedActivity,
-            era = selectedEra,
-            includeGenres = includeGenres,
-            excludeGenres = excludeGenres,
-            preferredLanguage = preferredLanguage,
-            energyLevel = energyLevel,
-            discoveryLevel = discoveryLevel,
-            prioritizeFavorites = prioritizeFavorites,
-            avoidExplicit = avoidExplicit
-        )
-    }
+    val generatedPromptPreview = buildAiPlaylistPrompt(
+        basePrompt = basePrompt,
+        mood = selectedMood,
+        activity = selectedActivity,
+        era = selectedEra,
+        includeGenres = includeGenres,
+        excludeGenres = excludeGenres,
+        preferredLanguage = preferredLanguage,
+        energyLevel = energyLevel,
+        discoveryLevel = discoveryLevel,
+        prioritizeFavorites = prioritizeFavorites,
+        avoidExplicit = avoidExplicit
+    )
 
     val triggerGeneration: () -> Unit = generation@{
         val minSongs = minSongsInput.toIntOrNull()
@@ -492,14 +484,21 @@ private fun CreateAiPlaylistContent(
                     }
 
                     MediumExtendedFloatingActionButton(
-                        onClick = triggerGeneration,
-                        //enabled = !isGenerating,
+                        onClick = {
+                            if (!isGenerating) {
+                                triggerGeneration()
+                            }
+                        },
+                        modifier = Modifier.alpha(if (controlsEnabled) 1f else 0.72f),
                         containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                         contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
                         shape = CircleShape
                     ) {
                         if (isGenerating) {
-                            LoadingIndicator(modifier = Modifier.height(28.dp))
+                            LoadingIndicator(
+                                modifier = Modifier.height(28.dp),
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text("Generating...")
                         } else {
@@ -524,13 +523,17 @@ private fun CreateAiPlaylistContent(
         ) {
             Spacer(modifier = Modifier.height(4.dp))
 
-            HeroAiCard(isGenerating = isGenerating)
+            HeroAiCard()
 
-            AiSectionCard(title = "Intent") {
+            AiSectionCard(
+                title = "Intent",
+                enabled = controlsEnabled
+            ) {
                 OutlinedTextField(
                     value = playlistName,
                     onValueChange = { playlistName = it },
                     label = { Text("Playlist name (optional)") },
+                    enabled = controlsEnabled,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -540,17 +543,22 @@ private fun CreateAiPlaylistContent(
                     onValueChange = { basePrompt = it },
                     label = { Text("What should this playlist feel like?") },
                     placeholder = { Text("Example: sunset drive with warm synths") },
+                    enabled = controlsEnabled,
                     minLines = 2,
                     maxLines = 4,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
 
-            AiSectionCard(title = "Direction") {
+            AiSectionCard(
+                title = "Direction",
+                enabled = controlsEnabled
+            ) {
                 Text("Mood", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                 ChipsSingleSelect(
                     options = moodOptions,
                     selected = selectedMood,
+                    enabled = controlsEnabled,
                     onSelectedChange = { selectedMood = it }
                 )
 
@@ -560,6 +568,7 @@ private fun CreateAiPlaylistContent(
                 ChipsSingleSelect(
                     options = activityOptions,
                     selected = selectedActivity,
+                    enabled = controlsEnabled,
                     onSelectedChange = { selectedActivity = it }
                 )
 
@@ -569,20 +578,29 @@ private fun CreateAiPlaylistContent(
                 ChipsSingleSelect(
                     options = eraOptions,
                     selected = selectedEra,
+                    enabled = controlsEnabled,
+                    allowCustom = false,
                     onSelectedChange = { selectedEra = it ?: "Any era" }
                 )
             }
 
-            AiSectionCard(title = "Curation Engine") {
+            AiSectionCard(
+                title = "Curation Engine",
+                enabled = controlsEnabled
+            ) {
                 LevelSelector(
                     label = "Energy",
                     selectedLevel = energyLevel,
+                    enabled = controlsEnabled,
+                    description = "Controls the intensity and tempo of songs. 1 = calm/slow, 5 = high-energy/fast.",
                     onLevelSelected = { energyLevel = it }
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 LevelSelector(
                     label = "Discovery",
                     selectedLevel = discoveryLevel,
+                    enabled = controlsEnabled,
+                    description = "Controls how familiar the selections are. 1 = your most played favorites, 5 = rarely played deep cuts.",
                     onLevelSelected = { discoveryLevel = it }
                 )
                 Spacer(modifier = Modifier.height(12.dp))
@@ -593,6 +611,7 @@ private fun CreateAiPlaylistContent(
                             minSongsInput = value.filter { ch: Char -> ch.isDigit() }.take(3)
                         },
                         label = { Text("Min songs") },
+                        enabled = controlsEnabled,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         modifier = Modifier.weight(1f)
@@ -603,6 +622,7 @@ private fun CreateAiPlaylistContent(
                             maxSongsInput = value.filter { ch: Char -> ch.isDigit() }.take(3)
                         },
                         label = { Text("Max songs") },
+                        enabled = controlsEnabled,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         modifier = Modifier.weight(1f)
@@ -610,12 +630,16 @@ private fun CreateAiPlaylistContent(
                 }
             }
 
-            AiSectionCard(title = "Filters") {
+            AiSectionCard(
+                title = "Filters",
+                enabled = controlsEnabled
+            ) {
                 OutlinedTextField(
                     value = includeGenres,
                     onValueChange = { includeGenres = it },
                     label = { Text("Prioritize genres (optional)") },
                     placeholder = { Text("e.g. synthwave, indie pop") },
+                    enabled = controlsEnabled,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -625,6 +649,7 @@ private fun CreateAiPlaylistContent(
                     onValueChange = { excludeGenres = it },
                     label = { Text("Avoid genres (optional)") },
                     placeholder = { Text("e.g. metal, hard trap") },
+                    enabled = controlsEnabled,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -634,6 +659,7 @@ private fun CreateAiPlaylistContent(
                     onValueChange = { preferredLanguage = it },
                     label = { Text("Preferred language (optional)") },
                     placeholder = { Text("e.g. English, Spanish, instrumental") },
+                    enabled = controlsEnabled,
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -643,11 +669,13 @@ private fun CreateAiPlaylistContent(
                 ToggleRow(
                     title = "Prioritize favorites",
                     checked = prioritizeFavorites,
+                    enabled = controlsEnabled,
                     onCheckedChange = { prioritizeFavorites = it }
                 )
                 ToggleRow(
                     title = "Avoid explicit lyrics",
                     checked = avoidExplicit,
+                    enabled = controlsEnabled,
                     onCheckedChange = { avoidExplicit = it }
                 )
             }
@@ -693,7 +721,7 @@ private fun CreateAiPlaylistContent(
 }
 
 @Composable
-private fun HeroAiCard(isGenerating: Boolean) {
+private fun HeroAiCard() {
     Card(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f)
@@ -729,19 +757,11 @@ private fun HeroAiCard(isGenerating: Boolean) {
                     )
                 ) {
                     Row(modifier = Modifier.padding(12.dp)) {
-                        if (isGenerating) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.height(22.dp),
-                                strokeWidth = 2.2.dp,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Rounded.AutoAwesome,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Rounded.AutoAwesome,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.width(12.dp))
@@ -775,6 +795,7 @@ private fun HeroAiCard(isGenerating: Boolean) {
 @Composable
 private fun AiSectionCard(
     title: String,
+    enabled: Boolean = true,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Card(
@@ -795,6 +816,7 @@ private fun AiSectionCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .alpha(if (enabled) 1f else 0.6f)
                 .padding(14.dp)
         ) {
             Text(
@@ -812,8 +834,16 @@ private fun AiSectionCard(
 private fun ChipsSingleSelect(
     options: List<String>,
     selected: String?,
+    enabled: Boolean = true,
+    allowCustom: Boolean = true,
     onSelectedChange: (String?) -> Unit
 ) {
+    var showCustomDialog by remember { mutableStateOf(false) }
+    var customInputValue by remember { mutableStateOf("") }
+    
+    // Check if current selection is a custom value (not in predefined options)
+    val isCustomSelection = selected != null && options.none { it == selected }
+    
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(0.dp)
@@ -833,6 +863,7 @@ private fun ChipsSingleSelect(
             }
             FilterChip(
                 selected = isSelected,
+                enabled = enabled,
                 shape = CircleShape,
                 onClick = {
                     onSelectedChange(if (isSelected) null else option)
@@ -851,6 +882,95 @@ private fun ChipsSingleSelect(
                 label = { Text(option) }
             )
         }
+        
+        // Add custom chip
+        if (allowCustom) {
+            val customIndex = options.size
+            val usePrimaryPalette = customIndex % 2 == 0
+            val selectedContainer = if (usePrimaryPalette) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.tertiaryContainer
+            }
+            val selectedLabel = if (usePrimaryPalette) {
+                MaterialTheme.colorScheme.onPrimaryContainer
+            } else {
+                MaterialTheme.colorScheme.onTertiaryContainer
+            }
+            
+            FilterChip(
+                selected = isCustomSelection,
+                enabled = enabled,
+                shape = CircleShape,
+                onClick = {
+                    if (isCustomSelection) {
+                        onSelectedChange(null)
+                    } else {
+                        customInputValue = selected ?: ""
+                        showCustomDialog = true
+                    }
+                },
+                border = BorderStroke(
+                    color = Color.Transparent,
+                    width = 0.dp
+                ),
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = selectedContainer,
+                    selectedLabelColor = selectedLabel,
+                    selectedLeadingIconColor = selectedLabel,
+                    containerColor = selectedContainer.copy(alpha = 0.24f),
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                ),
+                leadingIcon = if (!isCustomSelection) {
+                    { Icon(Icons.Rounded.Add, null, modifier = Modifier.size(18.dp)) }
+                } else null,
+                label = { 
+                    Text(
+                        if (isCustomSelection) selected!! 
+                        else "Custom…"
+                    ) 
+                }
+            )
+        }
+    }
+    
+    // Custom input dialog
+    if (showCustomDialog) {
+        AlertDialog(
+            onDismissRequest = { showCustomDialog = false },
+            icon = { Icon(Icons.Rounded.Add, null) },
+            title = { Text("Enter Custom Value") },
+            text = {
+                OutlinedTextField(
+                    value = customInputValue,
+                    onValueChange = { customInputValue = it },
+                    label = { Text("Enter your custom value") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                FilledTonalButton(
+                    onClick = {
+                        if (customInputValue.isNotBlank()) {
+                            onSelectedChange(customInputValue.trim())
+                        }
+                        showCustomDialog = false
+                        customInputValue = ""
+                    }
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                FilledTonalButton(onClick = { 
+                    showCustomDialog = false
+                    customInputValue = ""
+                }) {
+                    Text("Dismiss")
+                }
+            }
+        )
     }
 }
 
@@ -858,15 +978,41 @@ private fun ChipsSingleSelect(
 private fun LevelSelector(
     label: String,
     selectedLevel: Int,
+    enabled: Boolean = true,
+    description: String? = null,
     onLevelSelected: (Int) -> Unit
 ) {
-    Column {
+    var showDescription by remember { mutableStateOf(false) }
+    
+    Column(modifier = Modifier.animateContentSize()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                if (description != null) {
+                    IconButton(
+                        onClick = { showDescription = !showDescription },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Info,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = if (showDescription) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            }
+                        )
+                    }
+                }
+            }
             Text(
                 text = "$selectedLevel/5",
                 style = MaterialTheme.typography.labelLarge,
@@ -874,11 +1020,23 @@ private fun LevelSelector(
                 fontWeight = FontWeight.Bold
             )
         }
+        
+        if (showDescription && description != null) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 4.dp)
+            )
+        }
+        
         Spacer(modifier = Modifier.height(8.dp))
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             (1..5).forEach { level ->
                 SegmentedButton(
                     selected = selectedLevel == level,
+                    enabled = enabled,
                     onClick = { onLevelSelected(level) },
                     shape = SegmentedButtonDefaults.itemShape(index = level - 1, count = 5),
                     label = { Text(level.toString()) }
@@ -892,6 +1050,7 @@ private fun LevelSelector(
 private fun ToggleRow(
     title: String,
     checked: Boolean,
+    enabled: Boolean = true,
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
@@ -904,10 +1063,15 @@ private fun ToggleRow(
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.weight(1f)
         )
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Switch(
+            checked = checked,
+            enabled = enabled,
+            onCheckedChange = onCheckedChange
+        )
     }
 }
 
+@Composable
 private fun buildAiPlaylistPrompt(
     basePrompt: String,
     mood: String?,
@@ -921,6 +1085,7 @@ private fun buildAiPlaylistPrompt(
     prioritizeFavorites: Boolean,
     avoidExplicit: Boolean
 ): String {
+    val anyEraText = "Any era"
     val promptParts = mutableListOf<String>()
 
     if (basePrompt.isNotBlank()) {
@@ -932,7 +1097,7 @@ private fun buildAiPlaylistPrompt(
     if (!activity.isNullOrBlank()) {
         promptParts += "Activity context: $activity."
     }
-    if (era != "Any era") {
+    if (era != anyEraText) {
         promptParts += "Era focus: $era."
     }
     if (includeGenres.isNotBlank()) {

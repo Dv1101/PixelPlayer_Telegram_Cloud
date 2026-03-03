@@ -3,6 +3,7 @@ package com.theveloper.pixelplay.data.model
 import android.os.Parcelable
 import androidx.compose.runtime.Immutable
 import com.theveloper.pixelplay.utils.splitArtistsByDelimiters
+import kotlinx.parcelize.IgnoredOnParcel
 import kotlinx.parcelize.Parcelize
 
 @Immutable
@@ -37,7 +38,11 @@ data class Song(
     val sampleRate: Int?,
     val telegramFileId: Int? = null, // ID of the file in Telegram
     val telegramChatId: Long? = null, // ID of the chat where the file is located
+    val neteaseId: Long? = null, // Netease Cloud Music song ID
+    val gdriveFileId: String? = null, // Google Drive file ID
+    val qqMusicMid: String? = null, // QQ Music song MID
 ) : Parcelable {
+    @IgnoredOnParcel
     private val defaultArtistDelimiters = listOf("/", ";", ",", "+", "&")
 
     /**
@@ -90,7 +95,10 @@ data class Song(
                 bitrate = 0,
                 sampleRate = 0,
                 telegramFileId = null,
-                telegramChatId = null
+                telegramChatId = null,
+                neteaseId = null,
+                gdriveFileId = null,
+                qqMusicMid = null
             )
         }
     }

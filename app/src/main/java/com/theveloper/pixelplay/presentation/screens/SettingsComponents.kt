@@ -1,5 +1,10 @@
 package com.theveloper.pixelplay.presentation.screens
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,6 +28,7 @@ import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
@@ -51,6 +57,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.worker.SyncProgress
@@ -179,7 +186,6 @@ fun SwitchSettingItem(
                 checked = checked,
                 onCheckedChange = { newValue ->
                     if (enabled) {
-                        // Haptic feedback on toggle
                         performAppCompatHapticFeedback(
                             view,
                             appHapticsConfig,
@@ -189,13 +195,27 @@ fun SwitchSettingItem(
                     }
                 },
                 enabled = enabled,
-                    colors =
-                            SwitchDefaults.colors(
-                                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                                    checkedTrackColor = MaterialTheme.colorScheme.primary,
-                                    uncheckedThumbColor = MaterialTheme.colorScheme.onSurface,
-                                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
+                thumbContent = {
+                    AnimatedContent(
+                        targetState = checked,
+                        transitionSpec = { fadeIn(tween(100)) togetherWith fadeOut(tween(100)) },
+                        label = "switch_thumb_icon"
+                    ) { isChecked ->
+                        Icon(
+                            imageVector = if (isChecked) Icons.Rounded.Check else Icons.Rounded.Close,
+                            contentDescription = null,
+                            modifier = Modifier.size(SwitchDefaults.IconSize)
+                        )
+                    }
+                },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                    checkedIconColor = MaterialTheme.colorScheme.primary,
+                    uncheckedThumbColor = MaterialTheme.colorScheme.onSurface,
+                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    uncheckedIconColor = MaterialTheme.colorScheme.surfaceVariant
+                )
             )
         }
     }
@@ -223,11 +243,11 @@ fun ThemeSelectorItem(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
-                    verticalAlignment = Alignment.Top,
-                    modifier = Modifier.fillMaxWidth()
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Box(
-                        modifier = Modifier.padding(end = 16.dp, top = 2.dp).size(24.dp),
+                    modifier = Modifier.padding(end = 16.dp).size(24.dp),
                         contentAlignment = Alignment.Center
                 ) { leadingIcon() }
 
@@ -349,7 +369,9 @@ fun SliderSettingsItem(
         label: String,
         value: Float,
         valueRange: ClosedFloatingPointRange<Float>,
+        steps: Int,
         onValueChange: (Float) -> Unit,
+        onValueChangeFinished: (() -> Unit)? = null,
         valueText: (Float) -> String
 ) {
     Surface(
@@ -373,7 +395,13 @@ fun SliderSettingsItem(
                         fontWeight = FontWeight.Bold
                 )
             }
-            Slider(value = value, onValueChange = onValueChange, valueRange = valueRange)
+            Slider(
+                value = value,
+                onValueChange = onValueChange,
+                onValueChangeFinished = onValueChangeFinished,
+                valueRange = valueRange,
+                steps = steps
+            )
         }
     }
 }
@@ -728,6 +756,11 @@ fun GeminiSystemPromptItem(
     val hasChanges = localPrompt != systemPrompt
     val isDefault = systemPrompt == defaultPrompt
     var showSaved by remember { mutableStateOf(false) }
+    val presets = listOf(
+        "Balanced" to "You are a helpful AI assistant inside a music player app. Build playlists that match the user request first, then optimize flow and variety. Prefer familiar tracks with a small discovery ratio and avoid repetitive artist clustering.",
+        "Creative" to "You are a creative playlist curator. Follow the user request, but add tasteful surprises and deeper cuts when they still fit the mood. Keep transitions smooth and diversify artists, tempos, and eras.",
+        "Precise" to "You are a strict music recommendation assistant. Prioritize exact prompt matching, minimize weak matches, and keep results consistent with requested genres, mood, and activity. Return concise, deterministic selections over novelty."
+    )
 
     LaunchedEffect(showSaved) {
         if (showSaved) {
@@ -751,6 +784,26 @@ fun GeminiSystemPromptItem(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Preset Prompts",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                presets.forEach { preset ->
+                    OutlinedButton(
+                        onClick = { localPrompt = preset.second },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(text = preset.first, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
                 value = localPrompt,

@@ -77,11 +77,11 @@ android {
         // Aquí es donde debes agregar freeCompilerArgs para los informes del compilador de Compose.
         freeCompilerArgs += listOf(
             "-P",
-            "plugin:androidx.compose.compiler.plugins.kotlin:reportsDestination=${project.buildDir.absolutePath}/compose_compiler_reports"
+            "plugin:androidx.compose.compiler.plugins.kotlin:reportsDestination=${project.layout.buildDirectory.get().asFile.absolutePath}/compose_compiler_reports"
         )
         freeCompilerArgs += listOf(
             "-P",
-            "plugin:androidx.compose.compiler.plugins.kotlin:metricsDestination=${project.buildDir.absolutePath}/compose_compiler_metrics"
+            "plugin:androidx.compose.compiler.plugins.kotlin:metricsDestination=${project.layout.buildDirectory.get().asFile.absolutePath}/compose_compiler_metrics"
         )
 
         //Stability
@@ -97,9 +97,42 @@ android {
             it.useJUnitPlatform()
         }
     }
+
+    // ABI Splits: 为每个 CPU 架构生成独立 APK，避免单 APK 同时打包所有架构 native 库
+    // TDLib 单架构约 15~25MB，四架构合计 87MB，开启后每个 APK 只含对应架构
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            // 覆盖市面上 >99% 设备：arm64-v8a（现代手机）+ armeabi-v7a（旧设备）
+            // x86 / x86_64 仅模拟器使用，发布阶段可不包含
+            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+            isUniversalApk = true // 同时生成通用包（保留调试用途）
+        }
+    }
+
+    // AAB bundle 配置：通过 Google Play 分发时自动按架构拆分（推荐）
+    bundle {
+        abi {
+            enableSplit = true
+        }
+        density {
+            enableSplit = true
+        }
+        language {
+            enableSplit = true
+        }
+    }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+    arg("room.incremental", "true")
+    arg("room.generateKotlin", "true")
 }
 
 dependencies {
+    implementation(libs.quickjs)
     implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.paging.common)
     "baselineProfile"(project(":baselineprofile"))
@@ -107,17 +140,17 @@ dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation("androidx.lifecycle:lifecycle-process:2.9.0")
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
-    implementation(libs.androidx.material3)
-    implementation(libs.generativeai)
-    implementation(libs.androidx.mediarouter)
-    implementation(libs.play.services.cast.framework)
-    implementation(libs.androidx.navigation.runtime.ktx)
     implementation(libs.androidx.compose.material3)
+    // google.genai 1.11.0 — 新版统一 Gemini SDK
+    implementation(libs.google.genai)
+    implementation(libs.androidx.navigation.runtime.ktx)
     testImplementation(libs.junit.jupiter.api)
     testImplementation(libs.junit.jupiter.params)
     testRuntimeOnly(libs.junit.jupiter.engine)
@@ -137,6 +170,8 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.ui.test.junit4)
+    // Keep debug-only Compose tooling on the same version line as the runtime stack.
+    debugImplementation(platform(libs.androidx.compose.bom))
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 
@@ -192,18 +227,21 @@ dependencies {
     //Animations
     implementation(libs.androidx.animation)
 
-    //Material3
-    implementation(libs.material3)
-    implementation("androidx.compose.material3:material3-window-size-class:1.3.1")
-
     //Coil
     implementation(libs.coil.compose)
 
     //Capturable
-    implementation(libs.capturable) // Verifica la última versión en GitHub
+    implementation(libs.capturable) {
+        // Capturable brings its own loose Compose graph; keep it on the app's Compose line.
+        exclude(group = "androidx.compose.animation")
+        exclude(group = "androidx.compose.foundation")
+        exclude(group = "androidx.compose.material")
+        exclude(group = "androidx.compose.runtime")
+        exclude(group = "androidx.compose.ui")
+    }
 
     //Reorderable List/Drag and Drop
-    implementation(libs.compose.dnd)
+    // compose.dnd (mohamedrejeb) 未被使用，已删除
     implementation(libs.reorderables)
 
     //CodeView
@@ -216,7 +254,7 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.session)
-    implementation(libs.androidx.media.router)
+    implementation(libs.androidx.mediarouter)
     implementation(libs.google.play.services.cast.framework)
     implementation(libs.androidx.media3.exoplayer.ffmpeg)
 
@@ -250,8 +288,8 @@ dependencies {
     // Kotlin Collections
     implementation(libs.kotlinx.collections.immutable) // Verifica la última versión
 
-    // Gemini
-    implementation(libs.google.genai)
+    // Gemini — 使用 com.google.ai.client.generativeai (已在上方声明)
+    // google.genai (Java JVM SDK) 未被任何代码引用，已移除
 
     //permisisons
     implementation(libs.accompanist.permissions)
@@ -280,6 +318,8 @@ dependencies {
 
     // TagLib for metadata editing (supports mp3, flac, m4a, etc.)
     implementation(libs.taglib)
+    // JAudioTagger fallback for files where TagLib can't map ID3 frames (e.g. 48kHz ffmpeg encodes)
+    implementation(libs.jaudiotagger)
     // VorbisJava for Opus/Ogg metadata editing (TagLib has issues with Opus via file descriptors)
     implementation(libs.vorbisjava.core)
 
@@ -304,11 +344,20 @@ dependencies {
     implementation(libs.androidx.app)
     implementation(libs.androidx.app.projected)
 
+    // Wear OS Data Layer
+    implementation(project(":shared"))
+    implementation(libs.play.services.wearable)
+    implementation(libs.kotlinx.coroutines.play.services)
+
     // Telegram TDLib
     implementation(libs.tdlib)
+
+    // Google Sign-In via Credential Manager (for Google Drive)
+    implementation(libs.credentials)
+    implementation(libs.credentials.play.services.auth)
+    implementation(libs.googleid)
 }
 
 tasks.withType<Test> {
     useJUnitPlatform()
 }
-

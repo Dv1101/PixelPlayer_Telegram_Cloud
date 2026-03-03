@@ -1,5 +1,7 @@
 package com.theveloper.pixelplay.presentation.screens
 
+import com.theveloper.pixelplay.presentation.navigation.navigateSafely
+
 import android.os.Trace
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -28,7 +30,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material3.Button
@@ -47,7 +49,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -103,22 +105,22 @@ fun RecentlyPlayedScreen(
 ) {
     Trace.beginSection("RecentlyPlayedScreen.Composition")
 
-    val allSongs by playerViewModel.allSongsFlow.collectAsState()
-    val playbackHistory by playerViewModel.playbackHistory.collectAsState()
+    val allSongs by playerViewModel.allSongsFlow.collectAsStateWithLifecycle()
+    val playbackHistory by playerViewModel.playbackHistory.collectAsStateWithLifecycle()
     val currentSongId by remember(playerViewModel.stablePlayerState) {
         playerViewModel.stablePlayerState.map { it.currentSong?.id }.distinctUntilChanged()
-    }.collectAsState(initial = null)
+    }.collectAsStateWithLifecycle(initialValue = null)
     val isPlaying by remember(playerViewModel.stablePlayerState) {
         playerViewModel.stablePlayerState.map { it.isPlaying }.distinctUntilChanged()
-    }.collectAsState(initial = false)
-    val favoriteSongIds by playerViewModel.favoriteSongIds.collectAsState()
-    val playlistUiState by playlistViewModel.uiState.collectAsState()
+    }.collectAsStateWithLifecycle(initialValue = false)
+    val favoriteSongIds by playerViewModel.favoriteSongIds.collectAsStateWithLifecycle()
+    val selectedSongForInfo by playerViewModel.selectedSongForInfo.collectAsStateWithLifecycle()
+    val playlistUiState by playlistViewModel.uiState.collectAsStateWithLifecycle()
 
     var selectedRange by rememberSaveable { mutableStateOf(StatsTimeRange.WEEK) }
     val lazyListState = rememberLazyListState()
     var showSongInfoBottomSheet by remember { mutableStateOf(false) }
     var showPlaylistBottomSheet by remember { mutableStateOf(false) }
-    var selectedSongForInfo by remember { mutableStateOf<Song?>(null) }
     val bottomBarHeightDp = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
     val recentlyPlayedSongs = remember(playbackHistory, allSongs, selectedRange) {
@@ -237,7 +239,7 @@ fun RecentlyPlayedScreen(
                                     )
                                 },
                                 onMoreOptionsClick = { song ->
-                                    selectedSongForInfo = song
+                                    playerViewModel.selectSongForInfo(song)
                                     showSongInfoBottomSheet = true
                                 }
                             )
@@ -258,7 +260,6 @@ fun RecentlyPlayedScreen(
                 onDismiss = {
                     showSongInfoBottomSheet = false
                     showPlaylistBottomSheet = false
-                    selectedSongForInfo = null
                 },
                 onPlaySong = {
                     if (queueSongs.isNotEmpty()) {
@@ -279,11 +280,11 @@ fun RecentlyPlayedScreen(
                 },
                 onDeleteFromDevice = playerViewModel::deleteFromDevice,
                 onNavigateToAlbum = {
-                    navController.navigate(Screen.AlbumDetail.createRoute(song.albumId))
+                    navController.navigateSafely(Screen.AlbumDetail.createRoute(song.albumId))
                     showSongInfoBottomSheet = false
                 },
                 onNavigateToArtist = {
-                    navController.navigate(Screen.ArtistDetail.createRoute(song.artistId))
+                    navController.navigateSafely(Screen.ArtistDetail.createRoute(song.artistId))
                     showSongInfoBottomSheet = false
                 },
                 onEditSong = { newTitle, newArtist, newAlbum, newGenre, newLyrics, newTrackNumber, coverArtUpdate ->
@@ -327,7 +328,7 @@ fun RecentlyPlayedScreen(
                 .clip(CircleShape)
         ) {
             Icon(
-                imageVector = Icons.Rounded.ArrowBack,
+                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                 contentDescription = "Back"
             )
         }

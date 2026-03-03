@@ -1,5 +1,8 @@
 package com.theveloper.pixelplay.presentation.screens
 
+import com.theveloper.pixelplay.presentation.navigation.navigateSafely
+
+import android.content.Intent
 import androidx.activity.compose.ReportDrawnWhen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -32,11 +35,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,9 +66,12 @@ import androidx.media3.common.util.UnstableApi
 import androidx.navigation.NavController
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.model.Song
+import com.theveloper.pixelplay.data.preferences.CollagePattern
 import com.theveloper.pixelplay.presentation.components.AlbumArtCollage
 import com.theveloper.pixelplay.presentation.components.BetaInfoBottomSheet
 import com.theveloper.pixelplay.presentation.components.ChangelogBottomSheet
+import com.theveloper.pixelplay.presentation.netease.dashboard.NeteaseDashboardViewModel
+import com.theveloper.pixelplay.presentation.qqmusic.dashboard.QqMusicDashboardViewModel
 import com.theveloper.pixelplay.presentation.components.DailyMixSection
 import com.theveloper.pixelplay.presentation.components.HomeGradientTopBar
 import com.theveloper.pixelplay.presentation.components.HomeOptionsBottomSheet
@@ -75,6 +84,8 @@ import com.theveloper.pixelplay.presentation.components.StatsOverviewCard
 import com.theveloper.pixelplay.presentation.model.mapRecentlyPlayedSongs
 import com.theveloper.pixelplay.presentation.components.subcomps.PlayingEqIcon
 import com.theveloper.pixelplay.presentation.navigation.Screen
+import com.theveloper.pixelplay.presentation.components.StreamingProviderSheet
+import com.theveloper.pixelplay.presentation.telegram.auth.TelegramLoginActivity
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.SettingsViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.StatsViewModel
@@ -94,6 +105,8 @@ fun HomeScreen(
     paddingValuesParent: PaddingValues,
     playerViewModel: PlayerViewModel = hiltViewModel(),
     settingsViewModel: SettingsViewModel = hiltViewModel(),
+    neteaseViewModel: NeteaseDashboardViewModel = hiltViewModel(),
+    qqMusicViewModel: QqMusicDashboardViewModel = hiltViewModel(),
     onOpenSidebar: () -> Unit
 ) {
     val context = LocalContext.current
@@ -102,12 +115,12 @@ fun HomeScreen(
         (context as? android.app.Activity)?.intent?.getBooleanExtra("is_benchmark", false) ?: false
     }
     val statsViewModel: StatsViewModel = hiltViewModel()
-    val settingsUiState by settingsViewModel.uiState.collectAsState()
+    val settingsUiState by settingsViewModel.uiState.collectAsStateWithLifecycle()
     // 1) Observar sólo la lista de canciones, que cambia con poca frecuencia
-    val allSongs by playerViewModel.allSongsFlow.collectAsState(initial = emptyList())
-    val dailyMixSongs by playerViewModel.dailyMixSongs.collectAsState()
-    val curatedYourMixSongs by playerViewModel.yourMixSongs.collectAsState()
-    val playbackHistory by playerViewModel.playbackHistory.collectAsState()
+    val allSongs by playerViewModel.allSongsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val dailyMixSongs by playerViewModel.dailyMixSongs.collectAsStateWithLifecycle()
+    val curatedYourMixSongs by playerViewModel.yourMixSongs.collectAsStateWithLifecycle()
+    val playbackHistory by playerViewModel.playbackHistory.collectAsStateWithLifecycle()
 
     val yourMixSongs = remember(curatedYourMixSongs, dailyMixSongs, allSongs) {
         when {
@@ -136,14 +149,14 @@ fun HomeScreen(
     // 2) Observar sólo el currentSong (o null) para saber si mostrar padding
     val currentSong by remember(playerViewModel.stablePlayerState) {
         playerViewModel.stablePlayerState.map { it.currentSong }
-    }.collectAsState(initial = null)
+    }.collectAsStateWithLifecycle(initialValue = null)
 
     // 3) Observe shuffle state for sync
     val isShuffleEnabled by remember(playerViewModel.stablePlayerState) {
         playerViewModel.stablePlayerState
             .map { it.isShuffleEnabled }
             .distinctUntilChanged()
-    }.collectAsState(initial = false)
+    }.collectAsStateWithLifecycle(initialValue = false)
 
     // Padding inferior si hay canción en reproducción
     val bottomPadding = if (currentSong != null) MiniPlayerHeight else 0.dp
@@ -151,12 +164,13 @@ fun HomeScreen(
     var showOptionsBottomSheet by remember { mutableStateOf(false) }
     var showChangelogBottomSheet by remember { mutableStateOf(false) }
     var showBetaInfoBottomSheet by remember { mutableStateOf(false) }
+    var showStreamingProviderSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState()
     val betaSheetState = rememberModalBottomSheetState()
     val scope = rememberCoroutineScope()
     LocalContext.current
 
-    val weeklyStats by statsViewModel.weeklyOverview.collectAsState()
+    val weeklyStats by statsViewModel.weeklyOverview.collectAsStateWithLifecycle()
 
     // Drawer state for sidebar
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -169,7 +183,7 @@ fun HomeScreen(
             topBar = {
                 HomeGradientTopBar(
                     onNavigationIconClick = {
-                        navController.navigate(Screen.Settings.route)
+                        navController.navigateSafely(Screen.Settings.route)
                     },
                     onMoreOptionsClick = {
                         showChangelogBottomSheet = true
@@ -178,8 +192,7 @@ fun HomeScreen(
                         showBetaInfoBottomSheet = true
                     },
                     onTelegramClick = {
-                         val intent = android.content.Intent(context, com.theveloper.pixelplay.presentation.telegram.auth.TelegramLoginActivity::class.java)
-                         context.startActivity(intent)
+                         showStreamingProviderSheet = true
                     },
                     onMenuClick = {
                         // onOpenSidebar() // Disabled
@@ -200,7 +213,10 @@ fun HomeScreen(
                 verticalArrangement = Arrangement.spacedBy(24.dp)
             ) {
                 // Your Mix
-                item(key = "your_mix_header") {
+                item(
+                    key = "your_mix_header",
+                    contentType = "your_mix_header"
+                ) {
                     YourMixHeader(
                         song = yourMixSong,
                         isShuffleEnabled = isShuffleEnabled,
@@ -217,12 +233,30 @@ fun HomeScreen(
 
                 // Collage
                 if (yourMixSongs.isNotEmpty()) {
-                    item(key = "album_art_collage") {
+                    item(
+                        key = "album_art_collage",
+                        contentType = "album_art_collage"
+                    ) {
+                        val basePattern = settingsUiState.collagePattern
+                        val isAutoRotate = settingsUiState.collageAutoRotate
+                        val patterns = remember { CollagePattern.entries }
+
+                        val activePattern = if (isAutoRotate) {
+                            var rotationIndex by rememberSaveable { mutableIntStateOf(-1) }
+                            LaunchedEffect(Unit) { rotationIndex++ }
+                            remember(rotationIndex) {
+                                patterns[rotationIndex.coerceAtLeast(0) % patterns.size]
+                            }
+                        } else {
+                            basePattern
+                        }
+
                         AlbumArtCollage(
                             modifier = Modifier.fillMaxWidth(),
                             songs = yourMixSongs,
                             padding = 14.dp,
                             height = 400.dp,
+                            pattern = activePattern,
                             onSongClick = { song ->
                                 playerViewModel.showAndPlaySong(song, yourMixSongs, "Your Mix")
                             }
@@ -232,11 +266,14 @@ fun HomeScreen(
 
                 // Daily Mix
                 if (dailyMixSongs.isNotEmpty()) {
-                    item(key = "daily_mix_section") {
+                    item(
+                        key = "daily_mix_section",
+                        contentType = "daily_mix_section"
+                    ) {
                         DailyMixSection(
-                            songs = dailyMixSongs.take(4).toImmutableList(),
+                            songs = dailyMixSongs,
                             onClickOpen = {
-                                navController.navigate(Screen.DailyMixScreen.route)
+                                navController.navigateSafely(Screen.DailyMixScreen.route)
                             },
                             playerViewModel = playerViewModel
                         )
@@ -244,7 +281,10 @@ fun HomeScreen(
                 }
 
                 if (recentlyPlayedSongs.size >= RecentlyPlayedSectionMinSongsToShow) {
-                    item(key = "recently_played_section") {
+                    item(
+                        key = "recently_played_section",
+                        contentType = "recently_played_section"
+                    ) {
                         RecentlyPlayedSection(
                             songs = recentlyPlayedSongs,
                             onSongClick = { song ->
@@ -257,7 +297,7 @@ fun HomeScreen(
                                 }
                             },
                             onOpenAllClick = {
-                                navController.navigate(Screen.RecentlyPlayed.route)
+                                navController.navigateSafely(Screen.RecentlyPlayed.route)
                             },
                             currentSongId = currentSong?.id,
                             contentPadding = PaddingValues(start = 8.dp, end = 24.dp)
@@ -265,10 +305,13 @@ fun HomeScreen(
                     }
                 }
 
-                item(key = "listening_stats_preview") {
+                item(
+                    key = "listening_stats_preview",
+                    contentType = "listening_stats_preview"
+                ) {
                     StatsOverviewCard(
                         summary = weeklyStats,
-                        onClick = { navController.navigate(Screen.Stats.route) }
+                        onClick = { navController.navigateSafely(Screen.Stats.route) }
                     )
                 }
             }
@@ -304,7 +347,7 @@ fun HomeScreen(
                     }.invokeOnCompletion {
                         if (!sheetState.isVisible) {
                             showOptionsBottomSheet = false
-                            navController.navigate(Screen.DJSpace.route)
+                            navController.navigateSafely(Screen.DJSpace.route)
                         }
                     }
                 }
@@ -327,6 +370,21 @@ fun HomeScreen(
         ) {
             BetaInfoBottomSheet()
         }
+    }
+    if (showStreamingProviderSheet) {
+        val isNeteaseLoggedIn by neteaseViewModel.isLoggedIn.collectAsStateWithLifecycle()
+        val isQqMusicLoggedIn by qqMusicViewModel.isLoggedIn.collectAsStateWithLifecycle()
+        StreamingProviderSheet(
+            onDismissRequest = { showStreamingProviderSheet = false },
+            isNeteaseLoggedIn = isNeteaseLoggedIn,
+            onNavigateToNeteaseDashboard = {
+                navController.navigateSafely(Screen.NeteaseDashboard.route)
+            },
+            isQqMusicLoggedIn = isQqMusicLoggedIn,
+            onNavigateToQqMusicDashboard = {
+                navController.navigateSafely(Screen.QqMusicDashboard.route)
+            },
+        )
     }
 }
 
@@ -482,7 +540,7 @@ fun SongListItemFavsWrapper(
     modifier: Modifier = Modifier
 ) {
     // Collect the stablePlayerState once
-    val stablePlayerState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
+    val stablePlayerState by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
 
     // Derive isThisSongPlaying using remember
     val isThisSongPlaying = remember(song.id, stablePlayerState.currentSong?.id, stablePlayerState.isPlaying) {

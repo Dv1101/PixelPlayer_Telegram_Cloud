@@ -3,7 +3,6 @@ package com.theveloper.pixelplay.ui.glancewidget
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.util.Log
 import androidx.annotation.OptIn
 import androidx.glance.GlanceId
 import androidx.glance.action.ActionParameters
@@ -44,11 +43,23 @@ class PlayerControlActionCallback : ActionCallback {
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent)
+                try {
+                    context.startService(serviceIntent)
+                } catch (e: IllegalStateException) {
+                    Timber.tag(TAG).w(
+                        e,
+                        "startService denied in background for action %s; retrying as foreground service",
+                        action
+                    )
+                    serviceIntent.putExtra(MusicService.EXTRA_FORCE_FOREGROUND_ON_START, true)
+                    context.startForegroundService(serviceIntent)
+                }
             } else {
                 context.startService(serviceIntent)
             }
             Timber.tag(TAG).d("Service intent sent for action: $action")
+        } catch (e: android.app.ForegroundServiceStartNotAllowedException) {
+            Timber.tag(TAG).w(e, "Cannot start foreground service from background for action $action")
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error starting service for action $action: ${e.message}")
         }
@@ -58,9 +69,11 @@ class PlayerControlActionCallback : ActionCallback {
 object PlayerActions {
     val key = ActionParameters.Key<String>("playerActionKey_v1")
     val songIdKey = ActionParameters.Key<Long>("songIdKey_v1")
-    const val PLAY_PAUSE = "com.example.pixelplay.ACTION_WIDGET_PLAY_PAUSE"
-    const val NEXT = "com.example.pixelplay.ACTION_WIDGET_NEXT"
-    const val PREVIOUS = "com.example.pixelplay.ACTION_WIDGET_PREVIOUS"
-    const val FAVORITE = "com.example.pixelplay.ACTION_WIDGET_FAVORITE"
-    const val PLAY_FROM_QUEUE = "com.example.pixelplay.ACTION_WIDGET_PLAY_FROM_QUEUE"
+    const val PLAY_PAUSE = "com.theveloper.pixelplay.ACTION_WIDGET_PLAY_PAUSE"
+    const val NEXT = "com.theveloper.pixelplay.ACTION_WIDGET_NEXT"
+    const val PREVIOUS = "com.theveloper.pixelplay.ACTION_WIDGET_PREVIOUS"
+    const val FAVORITE = "com.theveloper.pixelplay.ACTION_WIDGET_FAVORITE"
+    const val PLAY_FROM_QUEUE = "com.theveloper.pixelplay.ACTION_WIDGET_PLAY_FROM_QUEUE"
+    const val SHUFFLE = "com.theveloper.pixelplay.ACTION_WIDGET_SHUFFLE"
+    const val REPEAT = "com.theveloper.pixelplay.ACTION_WIDGET_REPEAT"
 }

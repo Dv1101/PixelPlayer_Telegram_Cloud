@@ -29,6 +29,8 @@ import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
+private const val ENABLE_FOLDERS_STORAGE_FILTER = false
+
 /**
  * Manages the data state of the music library: Songs, Albums, Artists, Folders.
  * Handles loading from Repository and applying SortOptions.
@@ -42,6 +44,9 @@ class LibraryStateHolder @Inject constructor(
     // --- State ---
     private val _allSongs = MutableStateFlow<ImmutableList<Song>>(persistentListOf())
     val allSongs = _allSongs.asStateFlow()
+
+    private val _allSongsById = MutableStateFlow<Map<String, Song>>(emptyMap())
+    val allSongsById = _allSongsById.asStateFlow()
 
     private val _albums = MutableStateFlow<ImmutableList<Album>>(persistentListOf())
     val albums = _albums.asStateFlow()
@@ -66,6 +71,16 @@ class LibraryStateHolder @Inject constructor(
     private val _currentStorageFilter = MutableStateFlow(com.theveloper.pixelplay.data.model.StorageFilter.ALL)
     val currentStorageFilter = _currentStorageFilter.asStateFlow()
 
+    private fun effectiveFoldersStorageFilter(
+        selectedFilter: com.theveloper.pixelplay.data.model.StorageFilter
+    ): com.theveloper.pixelplay.data.model.StorageFilter {
+        return if (ENABLE_FOLDERS_STORAGE_FILTER) {
+            selectedFilter
+        } else {
+            com.theveloper.pixelplay.data.model.StorageFilter.OFFLINE
+        }
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val songsPagingFlow: kotlinx.coroutines.flow.Flow<androidx.paging.PagingData<Song>> = 
         kotlinx.coroutines.flow.combine(_currentSongSortOption, _currentStorageFilter) { sort, filter ->
@@ -89,13 +104,18 @@ class LibraryStateHolder @Inject constructor(
     val currentFavoriteSortOption = _currentFavoriteSortOption.asStateFlow()
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val favoritesPagingFlow: kotlinx.coroutines.flow.Flow<androidx.paging.PagingData<Song>> = _currentFavoriteSortOption
-        .flatMapLatest { sortOption ->
-            musicRepository.getPaginatedFavoriteSongs(sortOption)
+    val favoritesPagingFlow: kotlinx.coroutines.flow.Flow<androidx.paging.PagingData<Song>> =
+        kotlinx.coroutines.flow.combine(_currentFavoriteSortOption, _currentStorageFilter) { sort, filter ->
+            sort to filter
+        }.flatMapLatest { (sortOption, storageFilter) ->
+            musicRepository.getPaginatedFavoriteSongs(sortOption, storageFilter)
         }
         .flowOn(Dispatchers.IO)
 
-    val favoriteSongCountFlow: kotlinx.coroutines.flow.Flow<Int> = musicRepository.getFavoriteSongCountFlow()
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val favoriteSongCountFlow: kotlinx.coroutines.flow.Flow<Int> = _currentStorageFilter
+        .flatMapLatest { filter -> musicRepository.getFavoriteSongCountFlow(filter) }
+        .flowOn(Dispatchers.IO)
 
     @OptIn(ExperimentalStdlibApi::class)
     val genres: kotlinx.coroutines.flow.Flow<ImmutableList<com.theveloper.pixelplay.data.model.Genre>> = _allSongs
@@ -192,9 +212,15 @@ class LibraryStateHolder @Inject constructor(
         songsJob = scope?.launch {
             _isLoadingLibrary.value = true
             musicRepository.getAudioFiles().collect { songs ->
+                // Process heavy list conversions on Default dispatcher to avoid blocking UI
+                val immutableSongs = withContext(Dispatchers.Default) { songs.toImmutableList() }
+                val songsMap = withContext(Dispatchers.Default) { songs.associateBy { it.id } }
+                
+                _allSongs.value = immutableSongs
+                _allSongsById.value = songsMap
+                
                 // When the repository emits a new list (triggered by directory changes),
                 // we update our state and re-apply current sorting.
-                _allSongs.value = songs.toImmutableList()
                 // Apply sort to the new data
                 sortSongs(_currentSongSortOption.value, persist = false)
                 _isLoadingLibrary.value = false
@@ -215,7 +241,10 @@ class LibraryStateHolder @Inject constructor(
 
         artistsJob = scope?.launch {
             _isLoadingCategories.value = true
-            musicRepository.getArtists().collect { artists ->
+            @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+            _currentStorageFilter.flatMapLatest { filter ->
+                musicRepository.getArtists(filter)
+            }.collect { artists ->
                 _artists.value = artists.toImmutableList()
                 sortArtists(_currentArtistSortOption.value, persist = false)
                 _isLoadingCategories.value = false
@@ -223,7 +252,10 @@ class LibraryStateHolder @Inject constructor(
         }
 
         foldersJob = scope?.launch {
-            musicRepository.getMusicFolders().collect { folders ->
+            @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+            _currentStorageFilter.flatMapLatest { filter ->
+                musicRepository.getMusicFolders(effectiveFoldersStorageFilter(filter))
+            }.collect { folders ->
                 _musicFolders.value = folders.toImmutableList()
                 sortFolders(_currentFolderSortOption.value, persist = false)
             }

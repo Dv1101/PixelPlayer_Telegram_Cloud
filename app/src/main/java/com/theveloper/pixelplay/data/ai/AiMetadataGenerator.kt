@@ -1,9 +1,10 @@
 package com.theveloper.pixelplay.data.ai
 
-import com.google.ai.client.generativeai.GenerativeModel
-import com.google.ai.client.generativeai.type.SerializationException
 import com.theveloper.pixelplay.data.model.Song
-import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
+import kotlinx.serialization.SerializationException
+import com.theveloper.pixelplay.data.preferences.AiPreferencesRepository
+import com.theveloper.pixelplay.data.ai.provider.AiClientFactory
+import com.theveloper.pixelplay.data.ai.provider.AiProvider
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -19,9 +20,14 @@ data class SongMetadata(
 )
 
 class AiMetadataGenerator @Inject constructor(
-    private val userPreferencesRepository: UserPreferencesRepository,
+    private val aiPreferencesRepository: AiPreferencesRepository,
+    private val aiClientFactory: AiClientFactory,
     private val json: Json
 ) {
+    companion object {
+        // Removed DEFAULT_GEMINI_MODEL - now handled by provider implementations
+    }
+
     private fun cleanJson(jsonString: String): String {
         return jsonString.replace("```json", "").replace("```", "").trim()
     }
@@ -31,18 +37,34 @@ class AiMetadataGenerator @Inject constructor(
         fieldsToComplete: List<String>
     ): Result<SongMetadata> {
         return try {
-            val apiKey = userPreferencesRepository.geminiApiKey.first()
-            if (apiKey.isBlank()) {
-                return Result.failure(Exception("API Key not configured."))
+            // Get AI provider and create client
+            val providerName = aiPreferencesRepository.aiProvider.first()
+            val provider = AiProvider.fromString(providerName)
+            
+            // Get API key based on provider
+            val apiKey = when (provider) {
+                AiProvider.GEMINI -> aiPreferencesRepository.geminiApiKey.first()
+                AiProvider.DEEPSEEK -> aiPreferencesRepository.deepseekApiKey.first()
             }
+            
+            if (apiKey.isBlank()) {
+                return Result.failure(Exception("API Key not configured for ${provider.displayName}."))
+            }
+            
+            // Create AI client
+            val aiClient = aiClientFactory.createClient(provider, apiKey)
+            
+            // Get model based on provider
+            val selectedModel = when (provider) {
+                AiProvider.GEMINI -> aiPreferencesRepository.geminiModel.first()
+                AiProvider.DEEPSEEK -> aiPreferencesRepository.deepseekModel.first()
+            }
+            val modelName = selectedModel.ifBlank { aiClient.getDefaultModel() }
 
-            val selectedModel = userPreferencesRepository.geminiModel.first()
-            val modelName = selectedModel.ifEmpty { "" }
-
-            val generativeModel = GenerativeModel(
-                modelName = modelName,
-                apiKey = apiKey
-            )
+            val customSystemPrompt = when (provider) {
+                AiProvider.GEMINI -> aiPreferencesRepository.geminiSystemPrompt.first()
+                AiProvider.DEEPSEEK -> aiPreferencesRepository.deepseekSystemPrompt.first()
+            }
 
             val fieldsJson = fieldsToComplete.joinToString(separator = ", ") { "\"$it\"" }
 
@@ -65,6 +87,8 @@ class AiMetadataGenerator @Inject constructor(
 
             val fullPrompt = """
             $systemPrompt
+            Additional guidance:
+            $customSystemPrompt
 
             Song title: "${song.title}"
             Song artist: "${song.displayArtist}"
@@ -72,9 +96,8 @@ class AiMetadataGenerator @Inject constructor(
             Fields to complete: [$fieldsJson]
             """.trimIndent()
 
-            val response = generativeModel.generateContent(fullPrompt)
-            val responseText = response.text
-            if (responseText.isNullOrBlank()) {
+            val responseText = aiClient.generateContent(modelName, fullPrompt)
+            if (responseText.isBlank()) {
                 Timber.e("AI returned an empty or null response.")
                 return Result.failure(Exception("AI returned an empty response."))
             }

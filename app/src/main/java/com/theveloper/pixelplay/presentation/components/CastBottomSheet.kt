@@ -22,6 +22,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -43,6 +44,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -61,6 +65,7 @@ import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -69,13 +74,19 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -91,10 +102,12 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -116,10 +129,13 @@ import androidx.core.content.ContextCompat
 import androidx.media3.common.util.UnstableApi
 import androidx.mediarouter.media.MediaRouter
 import com.theveloper.pixelplay.R
+import com.theveloper.pixelplay.presentation.screens.TabAnimation
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
+import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 import android.content.pm.PackageManager
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -139,26 +155,27 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @androidx.annotation.OptIn(UnstableApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CastBottomSheet(
     playerViewModel: PlayerViewModel,
     onDismiss: () -> Unit,
     onExpansionChanged: (Float) -> Unit = {}
 ) {
-    val routes by playerViewModel.castRoutes.collectAsState()
-    val selectedRoute by playerViewModel.selectedRoute.collectAsState()
-    val routeVolume by playerViewModel.routeVolume.collectAsState()
-    val isRefreshing by playerViewModel.isRefreshingRoutes.collectAsState()
-    val isWifiEnabled by playerViewModel.isWifiEnabled.collectAsState()
-    val isWifiRadioOn by playerViewModel.isWifiRadioOn.collectAsState()
-    val wifiName by playerViewModel.wifiName.collectAsState()
-    val isBluetoothEnabled by playerViewModel.isBluetoothEnabled.collectAsState()
-    val bluetoothName by playerViewModel.bluetoothName.collectAsState()
-    val bluetoothAudioDevices by playerViewModel.bluetoothAudioDevices.collectAsState()
-    val isRemotePlaybackActive by playerViewModel.isRemotePlaybackActive.collectAsState()
-    val isCastConnecting by playerViewModel.isCastConnecting.collectAsState()
-    val trackVolume by playerViewModel.trackVolume.collectAsState()
-    val isPlaying = playerViewModel.stablePlayerStateInfrequent.collectAsState().value.isPlaying
+    val routes by playerViewModel.castRoutes.collectAsStateWithLifecycle()
+    val selectedRoute by playerViewModel.selectedRoute.collectAsStateWithLifecycle()
+    val routeVolume by playerViewModel.routeVolume.collectAsStateWithLifecycle()
+    val isRefreshing by playerViewModel.isRefreshingRoutes.collectAsStateWithLifecycle()
+    val isWifiEnabled by playerViewModel.isWifiEnabled.collectAsStateWithLifecycle()
+    val isWifiRadioOn by playerViewModel.isWifiRadioOn.collectAsStateWithLifecycle()
+    val wifiName by playerViewModel.wifiName.collectAsStateWithLifecycle()
+    val isBluetoothEnabled by playerViewModel.isBluetoothEnabled.collectAsStateWithLifecycle()
+    val bluetoothName by playerViewModel.bluetoothName.collectAsStateWithLifecycle()
+    val bluetoothAudioDevices by playerViewModel.bluetoothAudioDevices.collectAsStateWithLifecycle()
+    val isRemotePlaybackActive by playerViewModel.isRemotePlaybackActive.collectAsStateWithLifecycle()
+    val isCastConnecting by playerViewModel.isCastConnecting.collectAsStateWithLifecycle()
+    val trackVolume by playerViewModel.trackVolume.collectAsStateWithLifecycle()
+    val isPlaying = playerViewModel.stablePlayerState.collectAsStateWithLifecycle().value.isPlaying
     val context = LocalContext.current
 
     val requiredPermissions = remember {
@@ -198,6 +215,14 @@ fun CastBottomSheet(
     } else {
         emptyList()
     }
+    val bluetoothDeviceNames = bluetoothAudioDevices
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+    val activeBluetoothName = bluetoothName
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() && it in bluetoothDeviceNames }
+
     val devices = buildList {
         if (isWifiEnabled) {
             addAll(
@@ -229,12 +254,8 @@ fun CastBottomSheet(
         }
 
         if (isBluetoothEnabled) {
-            val bluetoothNames = (bluetoothAudioDevices + listOfNotNull(bluetoothName))
-                .filter { it.isNotEmpty() }
-                .distinct()
-
-            bluetoothNames.forEach { name ->
-                val isConnected = name == bluetoothName
+            bluetoothDeviceNames.forEach { name ->
+                val isConnected = name == activeBluetoothName
                 add(
                     CastDeviceUi(
                         id = "bluetooth_$name",
@@ -257,13 +278,14 @@ fun CastBottomSheet(
         }
     }
 
-    val activeDevice = if (isRemoteSession && activeRoute != null) {
+    val activeDevice = if (isRemoteSession) {
+        val remoteRoute = checkNotNull(activeRoute)
         ActiveDeviceUi(
-            id = activeRoute.id,
-            title = activeRoute.name,
+            id = remoteRoute.id,
+            title = remoteRoute.name,
             subtitle = "Casting session",
             isRemote = true,
-            icon = when (activeRoute.deviceType) {
+            icon = when (remoteRoute.deviceType) {
                 MediaRouter.RouteInfo.DEVICE_TYPE_TV -> Icons.Rounded.Tv
                 MediaRouter.RouteInfo.DEVICE_TYPE_REMOTE_SPEAKER, MediaRouter.RouteInfo.DEVICE_TYPE_BUILTIN_SPEAKER -> Icons.Rounded.Speaker
                 MediaRouter.RouteInfo.DEVICE_TYPE_BLUETOOTH_A2DP -> Icons.Rounded.Bluetooth
@@ -271,14 +293,14 @@ fun CastBottomSheet(
             },
             isConnecting = isCastConnecting,
             volume = routeVolume.toFloat().coerceAtLeast(0f),
-            volumeRange = 0f..activeRoute.volumeMax.toFloat().coerceAtLeast(1f),
+            volumeRange = 0f..remoteRoute.volumeMax.toFloat().coerceAtLeast(1f),
             connectionLabel = if (isCastConnecting) "Connecting" else "Connected"
         )
     } else {
-        val isBluetoothAudio = isBluetoothEnabled && !bluetoothName.isNullOrEmpty()
+        val isBluetoothAudio = isBluetoothEnabled && !activeBluetoothName.isNullOrEmpty()
         ActiveDeviceUi(
             id = "phone",
-            title = if (isBluetoothAudio) bluetoothName!! else "This phone",
+            title = if (isBluetoothAudio) activeBluetoothName!! else "This phone",
             subtitle = if (isBluetoothAudio) "Bluetooth audio" else "Local playback",
             isRemote = false,
             icon = if (isBluetoothAudio) Icons.Rounded.Bluetooth else Icons.Rounded.Headphones,
@@ -298,49 +320,74 @@ fun CastBottomSheet(
         devices = devices,
         activeDevice = activeDevice,
         isBluetoothEnabled = isBluetoothEnabled,
-        bluetoothName = bluetoothName
+        bluetoothName = activeBluetoothName
     )
 
-    CastSheetContainer(
-        onDismiss = onDismiss,
-        onExpansionChanged = onExpansionChanged
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { true }
+    )
+
+    DisposableEffect(Unit) {
+        onExpansionChanged(1f)
+        onDispose { onExpansionChanged(0f) }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        dragHandle = { BottomSheetDefaults.DragHandle() },
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 12.dp
     ) {
-        if (missingPermissions.isNotEmpty()) {
-            CastPermissionStep(
-                missingPermissions = missingPermissions,
-                onRequestPermissions = {
-                    permissionLauncher.launch(missingPermissions.toTypedArray())
+        // AQUÍ APLICAMOS EL FIX: Anulamos la fábrica de overscroll para todo lo que esté aquí adentro
+        CompositionLocalProvider(
+            LocalOverscrollFactory provides null
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(bottom = 18.dp)
+            ) {
+                if (missingPermissions.isNotEmpty()) {
+                    CastPermissionStep(
+                        missingPermissions = missingPermissions,
+                        onRequestPermissions = {
+                            permissionLauncher.launch(missingPermissions.toTypedArray())
+                        }
+                    )
+                } else {
+                    CastSheetContent(
+                        state = uiState,
+                        onSelectDevice = { id ->
+                            routes.firstOrNull { it.id == id }?.let { playerViewModel.selectRoute(it) }
+                        },
+                        onDisconnect = {
+                            playerViewModel.disconnect()
+                            onDismiss()
+                        },
+                        onVolumeChange = { value ->
+                            if (uiState.activeDevice.isRemote) {
+                                playerViewModel.setRouteVolume(value.toInt())
+                            } else {
+                                playerViewModel.setTrackVolume(value)
+                            }
+                        },
+                        onTurnOnWifi = {
+                            val intent = Intent(Settings.ACTION_WIFI_SETTINGS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        },
+                        onOpenBluetoothSettings = {
+                            val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            context.startActivity(intent)
+                        },
+                        onRefresh = { playerViewModel.refreshCastRoutes() },
+                        startWithControls = isRemoteSession
+                    )
                 }
-            )
-        } else {
-            CastSheetContent(
-                state = uiState,
-                onSelectDevice = { id ->
-                    routes.firstOrNull { it.id == id }?.let { playerViewModel.selectRoute(it) }
-                },
-                onDisconnect = {
-                    playerViewModel.disconnect()
-                    onDismiss()
-                },
-                onVolumeChange = { value ->
-                    if (uiState.activeDevice.isRemote) {
-                        playerViewModel.setRouteVolume(value.toInt())
-                    } else {
-                        playerViewModel.setTrackVolume(value)
-                    }
-                },
-                onTurnOnWifi = {
-                    val intent = Intent(Settings.ACTION_WIFI_SETTINGS)
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
-                },
-                onOpenBluetoothSettings = {
-                    val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(intent)
-                },
-                onRefresh = { playerViewModel.refreshCastRoutes() }
-            )
+            }
         }
     }
 }
@@ -500,157 +547,314 @@ private fun CastSheetContent(
     onVolumeChange: (Float) -> Unit,
     onTurnOnWifi: () -> Unit,
     onOpenBluetoothSettings: () -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    startWithControls: Boolean = true
 ) {
-    val colors = MaterialTheme.colorScheme
     val allConnectivityOff = !state.wifiEnabled && !state.isBluetoothEnabled
-    val listState = rememberLazyListState()
+    val configuration = LocalConfiguration.current
     val safeInsets = WindowInsets.safeDrawing.asPaddingValues()
-    val statusBarPadding = safeInsets.calculateTopPadding()
-    val navBarPadding = safeInsets.calculateBottomPadding()
-    val headerExpandedHeight = 152.dp
-    val headerCollapsedHeight = 64.dp
-    val density = LocalDensity.current
-    val headerTravelPx = with(density) { (headerExpandedHeight - headerCollapsedHeight).toPx() }
+    val maxPagerHeight = (
+        configuration.screenHeightDp.dp -
+            safeInsets.calculateTopPadding() -
+            safeInsets.calculateBottomPadding() -
+            212.dp
+        ).coerceAtLeast(280.dp)
+    val pagerState = rememberPagerState(
+        initialPage = if (startWithControls) 0 else 1,
+        pageCount = { 2 }
+    )
+    val scope = rememberCoroutineScope()
 
-    // Direct scroll-driven collapse calculation
-    val collapseFraction by remember {
-        derivedStateOf {
-            val scrollOffset = if (listState.firstVisibleItemIndex == 0) {
-                listState.firstVisibleItemScrollOffset.toFloat()
-            } else {
-                headerTravelPx
-            }
-            (scrollOffset / headerTravelPx).coerceIn(0f, 1f)
-        }
-    }
-
-    val headerOffsetPx by remember {
-        derivedStateOf {
-            -headerTravelPx * collapseFraction
-        }
-    }
-
-    val spacerHeight = headerExpandedHeight - headerCollapsedHeight
-
-    Box(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = statusBarPadding)
     ) {
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp),
-            state = listState,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            contentPadding = PaddingValues(
-                top = headerCollapsedHeight + spacerHeight,
-                bottom = navBarPadding + 24.dp
-            )
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            Box(
+                modifier = Modifier.background(
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    shape = CircleShape
+                )
+            ) {
+                Text(
+                    modifier = Modifier.padding(start = 6.dp, end = 8.dp),
+                    text = "Connect device",
+                    style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+            }
 
-            if (allConnectivityOff) {
-                item(key = "wifiOff") {
-                    WifiOffIllustration(
+            AnimatedVisibility(
+                visible = state.isScanning,
+                enter = fadeIn(animationSpec = tween(180)),
+                exit = fadeOut(animationSpec = tween(160)),
+                label = "tabScanningIndicator"
+            ) {
+                BadgeChip(
+                    text = "Scanning nearby",
+                    iconVector = Icons.Filled.Refresh,
+                    contentColor = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = maxPagerHeight)
+                .animateContentSize(
+                    animationSpec = tween(durationMillis = 280),
+                    alignment = Alignment.TopCenter
+                )
+        ) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .wrapContentHeight()
+                    .fillMaxWidth(),
+                verticalAlignment = Alignment.Top
+            ) { page ->
+                when (page) {
+                    0 -> CastControlsTabContent(
+                        state = state,
+                        allConnectivityOff = allConnectivityOff,
+                        onDisconnect = onDisconnect,
+                        onVolumeChange = onVolumeChange,
                         onTurnOnWifi = onTurnOnWifi,
-                        onOpenBluetoothSettings = onOpenBluetoothSettings
+                        onOpenBluetoothSettings = onOpenBluetoothSettings,
+                        onRefresh = onRefresh,
+                        bottomSpacing = 20.dp,
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                return@LazyColumn
-            }
-
-            stickyHeader(key = "activeDevice"){
-                ActiveDeviceHero(
-                    device = state.activeDevice,
-                    onDisconnect = onDisconnect,
-                    onVolumeChange = onVolumeChange
-                )
-            }
-
-            stickyHeader(key = "deviceSectionHeader") {
-                DeviceSectionHeader(
-                    modifier = Modifier.fillMaxWidth(),
-                    hasDevices = state.devices.isNotEmpty(),
-                    onRefresh = onRefresh
-                )
-            }
-
-            item(key = "refreshIndicator") {
-                AnimatedVisibility(
-                    visible = state.isRefreshing,
-                    enter = fadeIn(animationSpec = tween(200, easing = FastOutSlowInEasing)),
-                    exit = fadeOut(animationSpec = tween(180)),
-                    label = "refreshIndicator"
-                ) {
-                    LinearProgressIndicator(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(18.dp)),
-                        color = colors.primary,
-                        trackColor = colors.primary.copy(alpha = 0.12f)
+                    1 -> CastDevicesTabContent(
+                        state = state,
+                        allConnectivityOff = allConnectivityOff,
+                        onSelectDevice = onSelectDevice,
+                        onDisconnect = onDisconnect,
+                        onTurnOnWifi = onTurnOnWifi,
+                        onOpenBluetoothSettings = onOpenBluetoothSettings,
+                        onRefresh = onRefresh,
+                        maxContentHeight = maxPagerHeight,
                     )
-                }
-            }
-
-            if (state.isScanning && state.devices.isEmpty()) {
-                item(key = "scanningPlaceholder") {
-                    ScanningPlaceholderList()
-                }
-            } else if (state.devices.isEmpty()) {
-                item(key = "emptyDevices") {
-                    EmptyDeviceState()
-                }
-            } else {
-                items(state.devices, key = { it.id }) { device ->
-                    CastDeviceRow(
-                        device = device,
-                        onSelect = { onSelectDevice(device.id) },
-                        onDisconnect = onDisconnect
-                    )
-                }
-                item(key = "bottomSpacer") {
-                    Spacer(modifier = Modifier.height(120.dp))
                 }
             }
         }
 
-        CollapsibleCastTopBar(
+        PrimaryTabRow(
+            selectedTabIndex = pagerState.currentPage,
             modifier = Modifier
-                .padding(horizontal = 20.dp)
                 .fillMaxWidth()
-                .height(headerExpandedHeight)
-                .offset { IntOffset(x = 0, y = headerOffsetPx.roundToInt()) }
-                .clipToBounds(),
-            collapseFraction = collapseFraction,
-            isScanning = state.isScanning,
-            wifiOn = state.wifiRadioOn,
-            wifiConnected = state.wifiEnabled,
-            wifiSsid = state.wifiSsid,
-            onWifiClick = onTurnOnWifi,
-            isBluetoothEnabled = state.isBluetoothEnabled,
-            bluetoothName = state.bluetoothName,
-            onBluetoothClick = onOpenBluetoothSettings,
-            maxHeight = headerExpandedHeight
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(5.dp),
+            containerColor = Color.Transparent,
+            divider = {},
+            indicator = {}
+        ) {
+            TabAnimation(
+                index = 0,
+                title = "Controls",
+                selectedIndex = pagerState.currentPage,
+                onClick = {
+                    scope.launch {
+                        pagerState.animateScrollToPage(0)
+                    }
+                },
+                transformOrigin = TransformOrigin(0f, 0.5f)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Rounded.Speaker,
+                        contentDescription = "Controls",
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "CONTROLS",
+                        fontFamily = GoogleSansRounded,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            TabAnimation(
+                index = 1,
+                title = "Devices",
+                selectedIndex = pagerState.currentPage,
+                onClick = {
+                    scope.launch {
+                        pagerState.animateScrollToPage(1)
+                    }
+                },
+                transformOrigin = TransformOrigin(1f, 0.5f)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Filled.Devices,
+                        contentDescription = "Devices",
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "DEVICES",
+                        fontFamily = GoogleSansRounded,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CastControlsTabContent(
+    state: CastSheetUiState,
+    allConnectivityOff: Boolean,
+    onDisconnect: () -> Unit,
+    onVolumeChange: (Float) -> Unit,
+    onTurnOnWifi: () -> Unit,
+    onOpenBluetoothSettings: () -> Unit,
+    onRefresh: () -> Unit,
+    bottomSpacing: Dp,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        ActiveDeviceHero(
+            device = state.activeDevice,
+            onDisconnect = onDisconnect,
+            onVolumeChange = onVolumeChange
         )
 
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .height(32.dp)
-                .background(
-                    brush = Brush.verticalGradient(
-                        listOf(
-                            Color.Transparent,
-                            MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.5f),
-                            MaterialTheme.colorScheme.surfaceContainerLow
-                        )
-                    )
-                )
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "Connectivity",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Text(
+                        text = if (allConnectivityOff) {
+                            "Turn on Wi-Fi or Bluetooth"
+                        } else {
+                            "Manage active radios and rescan"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = onRefresh) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "Refresh connections")
+                }
+            }
+            QuickSettingsRow(
+                wifiOn = state.wifiRadioOn,
+                wifiConnected = state.wifiEnabled,
+                wifiSsid = state.wifiSsid,
+                onWifiClick = onTurnOnWifi,
+                bluetoothEnabled = state.isBluetoothEnabled,
+                bluetoothName = state.bluetoothName,
+                onBluetoothClick = onOpenBluetoothSettings
+            )
+        }
 
+        if (allConnectivityOff) {
+            WifiOffIllustration(
+                onTurnOnWifi = onTurnOnWifi,
+                onOpenBluetoothSettings = onOpenBluetoothSettings
+            )
+        }
+
+        Spacer(modifier = Modifier.height(bottomSpacing))
+    }
+}
+
+@Composable
+private fun CastDevicesTabContent(
+    state: CastSheetUiState,
+    allConnectivityOff: Boolean,
+    onSelectDevice: (String) -> Unit,
+    onDisconnect: () -> Unit,
+    onTurnOnWifi: () -> Unit,
+    onOpenBluetoothSettings: () -> Unit,
+    onRefresh: () -> Unit,
+    maxContentHeight: Dp,
+) {
+    val colors = MaterialTheme.colorScheme
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = maxContentHeight)
+            .padding(horizontal = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(bottom = 20.dp)
+    ) {
+        item(key = "deviceSectionHeader") {
+            DeviceSectionHeader(
+                modifier = Modifier.fillMaxWidth(),
+                hasDevices = state.devices.isNotEmpty(),
+                    onRefresh = onRefresh
+            )
+        }
+
+        item(key = "refreshIndicator") {
+            AnimatedVisibility(
+                visible = state.isRefreshing,
+                enter = fadeIn(animationSpec = tween(200, easing = FastOutSlowInEasing)),
+                exit = fadeOut(animationSpec = tween(180)),
+                label = "refreshIndicator"
+            ) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp)),
+                    color = colors.primary,
+                    trackColor = colors.primary.copy(alpha = 0.12f)
+                )
+            }
+        }
+
+        if (allConnectivityOff) {
+            item(key = "wifiOff") {
+                WifiOffIllustration(
+                    onTurnOnWifi = onTurnOnWifi,
+                    onOpenBluetoothSettings = onOpenBluetoothSettings
+                )
+            }
+        } else if (state.isScanning && state.devices.isEmpty()) {
+            item(key = "scanningPlaceholder") {
+                ScanningPlaceholderList()
+            }
+        } else if (state.devices.isEmpty()) {
+            item(key = "emptyDevices") {
+                EmptyDeviceState()
+            }
+        } else {
+            items(state.devices, key = { it.id }) { device ->
+                CastDeviceRow(
+                    device = device,
+                    onSelect = { onSelectDevice(device.id) },
+                    onDisconnect = onDisconnect
+                )
+            }
         }
     }
 }

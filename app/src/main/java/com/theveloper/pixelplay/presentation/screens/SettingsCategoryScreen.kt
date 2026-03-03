@@ -1,5 +1,7 @@
 package com.theveloper.pixelplay.presentation.screens
 
+import com.theveloper.pixelplay.presentation.navigation.navigateSafely
+
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -7,7 +9,6 @@ import android.os.Environment
 import android.provider.Settings
 import android.text.format.Formatter
 import android.widget.Toast
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
@@ -23,6 +24,8 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Arrangement
@@ -59,7 +62,8 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.Style
 import androidx.compose.material.icons.outlined.Warning
-import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
@@ -97,7 +101,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -137,6 +141,7 @@ import com.theveloper.pixelplay.data.backup.model.BackupTransferProgressUpdate
 import com.theveloper.pixelplay.data.backup.model.ModuleRestoreDetail
 import com.theveloper.pixelplay.data.backup.model.RestorePlan
 import com.theveloper.pixelplay.data.preferences.AppThemeMode
+import com.theveloper.pixelplay.data.preferences.CollagePattern
 import com.theveloper.pixelplay.data.preferences.CarouselStyle
 import com.theveloper.pixelplay.data.preferences.LaunchTab
 import com.theveloper.pixelplay.data.preferences.LibraryNavigationMode
@@ -144,12 +149,12 @@ import com.theveloper.pixelplay.data.preferences.NavBarStyle
 import com.theveloper.pixelplay.data.preferences.ThemePreference
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.data.model.LyricsSourcePreference
+import com.theveloper.pixelplay.presentation.components.CollapsibleCommonTopBar
 import com.theveloper.pixelplay.presentation.components.ExpressiveTopBarContent
 import com.theveloper.pixelplay.presentation.components.FileExplorerDialog
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
 import com.theveloper.pixelplay.presentation.model.SettingsCategory
 import com.theveloper.pixelplay.presentation.navigation.Screen
-import com.theveloper.pixelplay.presentation.viewmodel.PlayerSheetState
 import com.theveloper.pixelplay.presentation.viewmodel.LyricsRefreshProgress
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.SettingsViewModel
@@ -168,28 +173,27 @@ fun SettingsCategoryScreen(
 ) {
     val category = SettingsCategory.fromId(categoryId) ?: return
     val context = LocalContext.current
-    val playerSheetState by playerViewModel.sheetState.collectAsState()
-
-    BackHandler(enabled = playerSheetState == PlayerSheetState.EXPANDED) {
-        playerViewModel.collapsePlayerSheet()
-    }
     
     // State Collection (Duplicated from SettingsScreen for now to ensure functionality)
-    val uiState by settingsViewModel.uiState.collectAsState()
-    val geminiApiKey by settingsViewModel.geminiApiKey.collectAsState()
-    val geminiModel by settingsViewModel.geminiModel.collectAsState()
-    val geminiSystemPrompt by settingsViewModel.geminiSystemPrompt.collectAsState()
-    val currentPath by settingsViewModel.currentPath.collectAsState()
-    val directoryChildren by settingsViewModel.currentDirectoryChildren.collectAsState()
-    val availableStorages by settingsViewModel.availableStorages.collectAsState()
-    val selectedStorageIndex by settingsViewModel.selectedStorageIndex.collectAsState()
-    val isLoadingDirectories by settingsViewModel.isLoadingDirectories.collectAsState()
-    val isExplorerPriming by settingsViewModel.isExplorerPriming.collectAsState()
-    val isExplorerReady by settingsViewModel.isExplorerReady.collectAsState()
-    val isSyncing by settingsViewModel.isSyncing.collectAsState()
-    val syncProgress by settingsViewModel.syncProgress.collectAsState()
-    val dataTransferProgress by settingsViewModel.dataTransferProgress.collectAsState()
-    val allSongs by playerViewModel.allSongsFlow.collectAsState()
+    val uiState by settingsViewModel.uiState.collectAsStateWithLifecycle()
+    val geminiApiKey by settingsViewModel.geminiApiKey.collectAsStateWithLifecycle()
+    val geminiModel by settingsViewModel.geminiModel.collectAsStateWithLifecycle()
+    val geminiSystemPrompt by settingsViewModel.geminiSystemPrompt.collectAsStateWithLifecycle()
+    val aiProvider by settingsViewModel.aiProvider.collectAsStateWithLifecycle()
+    val deepseekApiKey by settingsViewModel.deepseekApiKey.collectAsStateWithLifecycle()
+    val deepseekModel by settingsViewModel.deepseekModel.collectAsStateWithLifecycle()
+    val deepseekSystemPrompt by settingsViewModel.deepseekSystemPrompt.collectAsStateWithLifecycle()
+    val currentPath by settingsViewModel.currentPath.collectAsStateWithLifecycle()
+    val directoryChildren by settingsViewModel.currentDirectoryChildren.collectAsStateWithLifecycle()
+    val availableStorages by settingsViewModel.availableStorages.collectAsStateWithLifecycle()
+    val selectedStorageIndex by settingsViewModel.selectedStorageIndex.collectAsStateWithLifecycle()
+    val isLoadingDirectories by settingsViewModel.isLoadingDirectories.collectAsStateWithLifecycle()
+    val isExplorerPriming by settingsViewModel.isExplorerPriming.collectAsStateWithLifecycle()
+    val isExplorerReady by settingsViewModel.isExplorerReady.collectAsStateWithLifecycle()
+    val isSyncing by settingsViewModel.isSyncing.collectAsStateWithLifecycle()
+    val syncProgress by settingsViewModel.syncProgress.collectAsStateWithLifecycle()
+    val dataTransferProgress by settingsViewModel.dataTransferProgress.collectAsStateWithLifecycle()
+    val allSongs by playerViewModel.allSongsFlow.collectAsStateWithLifecycle()
     val explorerRoot = settingsViewModel.explorerRoot()
 
     // Local State
@@ -205,6 +209,9 @@ fun SettingsCategoryScreen(
     var showImportFlow by remember { mutableStateOf(false) }
     var exportSections by remember { mutableStateOf(BackupSection.defaultSelection) }
     var importFileUri by remember { mutableStateOf<Uri?>(null) }
+    var minSongDurationDraft by remember(uiState.minSongDuration) {
+        mutableStateOf(uiState.minSongDuration.toFloat())
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/octet-stream")
@@ -264,12 +271,16 @@ fun SettingsCategoryScreen(
     }
 
     // Fetch models on page load when API key exists and models are not already loaded
-    LaunchedEffect(category, geminiApiKey) {
-        if (category == SettingsCategory.AI_INTEGRATION && 
-            geminiApiKey.isNotBlank() && 
-            uiState.availableModels.isEmpty() && 
-            !uiState.isLoadingModels) {
-            settingsViewModel.fetchAvailableModels(geminiApiKey)
+    LaunchedEffect(category, aiProvider, geminiApiKey, deepseekApiKey) {
+        if (category == SettingsCategory.AI_INTEGRATION && !uiState.isLoadingModels) {
+            val apiKey = when (aiProvider) {
+                "DEEPSEEK" -> deepseekApiKey
+                else -> geminiApiKey
+            }
+            
+            if (apiKey.isNotBlank() && uiState.availableModels.isEmpty()) {
+                settingsViewModel.fetchAvailableModels(apiKey, aiProvider)
+            }
         }
     }
 
@@ -357,7 +368,7 @@ fun SettingsCategoryScreen(
             state = lazyListState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
-                top = currentTopBarHeightDp,
+                top = currentTopBarHeightDp + 8.dp,
                 start = 16.dp,
                 end = 16.dp,
                 bottom = MiniPlayerHeight + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 16.dp
@@ -399,7 +410,24 @@ fun SettingsCategoryScreen(
                                     subtitle = "Multi-artist parsing and organization options.",
                                     leadingIcon = { Icon(Icons.Outlined.Person, null, tint = MaterialTheme.colorScheme.secondary) },
                                     trailingIcon = { Icon(Icons.Rounded.ChevronRight, "Open", tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                    onClick = { navController.navigate(Screen.ArtistSettings.route) }
+                                    onClick = { navController.navigateSafely(Screen.ArtistSettings.route) }
+                                )
+                            }
+
+                            SettingsSubsection(title = "Filtering") {
+                                SliderSettingsItem(
+                                    label = "Minimum Song Duration",
+                                    value = minSongDurationDraft,
+                                    valueRange = 0f..120000f,
+                                    steps = 23, // 0, 5, 10, 15, ... 120 seconds (24 positions, 23 steps)
+                                    onValueChange = { minSongDurationDraft = it },
+                                    onValueChangeFinished = {
+                                        val selectedDuration = minSongDurationDraft.toInt()
+                                        if (selectedDuration != uiState.minSongDuration) {
+                                            settingsViewModel.setMinSongDuration(selectedDuration)
+                                        }
+                                    },
+                                    valueText = { value -> "${(value / 1000).toInt()}s" }
                                 )
                             }
 
@@ -459,7 +487,7 @@ fun SettingsCategoryScreen(
                             }
                         }
                         SettingsCategory.APPEARANCE -> {
-                            val useSmoothCorners by settingsViewModel.useSmoothCorners.collectAsState()
+                            val useSmoothCorners by settingsViewModel.useSmoothCorners.collectAsStateWithLifecycle()
 
                             SettingsSubsection(title = "Global Theme") {
                                 ThemeSelectorItem(
@@ -507,7 +535,7 @@ fun SettingsCategoryScreen(
                                     subtitle = "Current: ${uiState.albumArtPaletteStyle.label}. Open live preview and choose style.",
                                     leadingIcon = { Icon(Icons.Outlined.Style, null, tint = MaterialTheme.colorScheme.secondary) },
                                     trailingIcon = { Icon(Icons.Rounded.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                    onClick = { navController.navigate(Screen.PaletteStyle.route) }
+                                    onClick = { navController.navigateSafely(Screen.PaletteStyle.route) }
                                 )
                                 ThemeSelectorItem(
                                     label = "Carousel Style",
@@ -519,6 +547,26 @@ fun SettingsCategoryScreen(
                                     selectedKey = uiState.carouselStyle,
                                     onSelectionChanged = { settingsViewModel.setCarouselStyle(it) },
                                     leadingIcon = { Icon(painterResource(R.drawable.rounded_view_carousel_24), null, tint = MaterialTheme.colorScheme.secondary) }
+                                )
+                            }
+
+                            SettingsSubsection(title = "Home Collage") {
+                                ThemeSelectorItem(
+                                    label = "Collage Pattern",
+                                    description = "Choose the shape arrangement for the Your Mix collage.",
+                                    options = CollagePattern.entries.associate { it.storageKey to it.label },
+                                    selectedKey = uiState.collagePattern.storageKey,
+                                    onSelectionChanged = { key ->
+                                        settingsViewModel.setCollagePattern(CollagePattern.fromStorageKey(key))
+                                    },
+                                    leadingIcon = { Icon(painterResource(R.drawable.rounded_view_column_24), null, tint = MaterialTheme.colorScheme.secondary) }
+                                )
+                                SwitchSettingItem(
+                                    title = "Auto-Rotate Patterns",
+                                    subtitle = "Cycle through collage patterns each time you visit Home.",
+                                    checked = uiState.collageAutoRotate,
+                                    onCheckedChange = { settingsViewModel.setCollageAutoRotate(it) },
+                                    leadingIcon = { Icon(painterResource(R.drawable.rounded_shuffle_24), null, tint = MaterialTheme.colorScheme.secondary) }
                                 )
                             }
 
@@ -539,7 +587,7 @@ fun SettingsCategoryScreen(
                                     subtitle = "Adjust the corner radius of the navigation bar.",
                                     leadingIcon = { Icon(painterResource(R.drawable.rounded_rounded_corner_24), null, tint = MaterialTheme.colorScheme.secondary) },
                                     trailingIcon = { Icon(Icons.Rounded.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                    onClick = { navController.navigate("nav_bar_corner_radius") }
+                                    onClick = { navController.navigateSafely("nav_bar_corner_radius") }
                                 )
                             }
 
@@ -635,6 +683,29 @@ fun SettingsCategoryScreen(
                                 )
                             }
 
+                            SettingsSubsection(title = "Volume Normalization (ReplayGain)") {
+                                SwitchSettingItem(
+                                    title = "Enable ReplayGain",
+                                    subtitle = "Normalize volume levels using ReplayGain metadata from audio files.",
+                                    checked = uiState.replayGainEnabled,
+                                    onCheckedChange = { settingsViewModel.setReplayGainEnabled(it) }
+                                )
+                                AnimatedVisibility(
+                                    visible = uiState.replayGainEnabled,
+                                    enter = expandVertically(animationSpec = spring(dampingRatio = 0.8f, stiffness = 400f)) + fadeIn(animationSpec = spring(stiffness = 400f)),
+                                    exit = shrinkVertically(animationSpec = spring(stiffness = 500f)) + fadeOut(animationSpec = spring(stiffness = 500f))
+                                ) {
+                                    ThemeSelectorItem(
+                                        label = "Gain Mode",
+                                        description = "Track: normalize each song. Album: normalize per album.",
+                                        options = mapOf("track" to "Track", "album" to "Album"),
+                                        selectedKey = if (uiState.replayGainUseAlbumGain) "album" else "track",
+                                        onSelectionChanged = { settingsViewModel.setReplayGainUseAlbumGain(it == "album") },
+                                        leadingIcon = { Icon(painterResource(R.drawable.rounded_volume_down_24), null, tint = MaterialTheme.colorScheme.secondary) }
+                                    )
+                                }
+                            }
+
                             SettingsSubsection(title = "Cast") {
                                 ThemeSelectorItem(
                                     label = "Auto-play on cast connect/disconnect",
@@ -659,7 +730,8 @@ fun SettingsCategoryScreen(
                                     SliderSettingsItem(
                                         label = "Crossfade Duration",
                                         value = uiState.crossfadeDuration.toFloat(),
-                                        valueRange = 2000f..12000f,
+                                        valueRange = 1000f..12000f,
+                                        steps= 10,
                                         onValueChange = { settingsViewModel.setCrossfadeDuration(it.toInt()) },
                                         valueText = { value -> "${(value / 1000).toInt()}s" }
                                     )
@@ -724,16 +796,50 @@ fun SettingsCategoryScreen(
                             }
                         }
                         SettingsCategory.AI_INTEGRATION -> {
-                            SettingsSubsection(title = "Credentials") {
-                                GeminiApiKeyItem(
-                                    apiKey = geminiApiKey,
-                                    onApiKeySave = { settingsViewModel.onGeminiApiKeyChange(it) },
-                                    title = "Gemini API Key",
-                                    subtitle = "Needed for AI-powered features."
+                            // AI Provider Selection
+                            SettingsSubsection(title = "AI Provider") {
+                                ThemeSelectorItem(
+                                    label = "Provider",
+                                    description = "Choose your AI provider",
+                                    options = mapOf(
+                                        "GEMINI" to "Google Gemini",
+                                        "DEEPSEEK" to "DeepSeek"
+                                    ),
+                                    selectedKey = aiProvider,
+                                    onSelectionChanged = { settingsViewModel.onAiProviderChange(it) },
+                                    leadingIcon = { Icon(Icons.Rounded.Science, null, tint = MaterialTheme.colorScheme.secondary) }
                                 )
                             }
+                            
+                            // API Key Section
+                            SettingsSubsection(title = "Credentials") {
+                                when (aiProvider) {
+                                    "GEMINI" -> {
+                                        GeminiApiKeyItem(
+                                            apiKey = geminiApiKey,
+                                            onApiKeySave = { settingsViewModel.onGeminiApiKeyChange(it) },
+                                            title = "Gemini API Key",
+                                            subtitle = "Get from Google AI Studio (aistudio.google.com)"
+                                        )
+                                    }
+                                    "DEEPSEEK" -> {
+                                        GeminiApiKeyItem(
+                                            apiKey = deepseekApiKey,
+                                            onApiKeySave = { settingsViewModel.onDeepseekApiKeyChange(it) },
+                                            title = "DeepSeek API Key",
+                                            subtitle = "Get from DeepSeek Platform (api.deepseek.com)"
+                                        )
+                                    }
+                                }
+                            }
 
-                            if (uiState.availableModels.isNotEmpty()) {
+                            // Model Selection Section
+                            val hasApiKey = when (aiProvider) {
+                                "DEEPSEEK" -> deepseekApiKey.isNotBlank()
+                                else -> geminiApiKey.isNotBlank()
+                            }
+                            
+                            if (hasApiKey) {
                                 SettingsSubsection(title = "Model Selection") {
                                     if (uiState.isLoadingModels) {
                                         Surface(
@@ -771,30 +877,60 @@ fun SettingsCategoryScreen(
                                             )
                                         }
                                     } else if (uiState.availableModels.isNotEmpty()) {
+                                        val currentModel = when (aiProvider) {
+                                            "GEMINI" -> geminiModel
+                                            "DEEPSEEK" -> deepseekModel
+                                            else -> ""
+                                        }
+                                        val modelLabel = when (aiProvider) {
+                                            "GEMINI" -> "Select the Gemini model to use."
+                                            "DEEPSEEK" -> "Select the DeepSeek model to use."
+                                            else -> "Select a model."
+                                        }
                                         ThemeSelectorItem(
                                             label = "AI Model",
-                                            description = "Select the Gemini model to use.",
+                                            description = modelLabel,
                                             options = uiState.availableModels.associate { it.name to it.displayName },
-                                            selectedKey = geminiModel.ifEmpty { uiState.availableModels.firstOrNull()?.name ?: "" },
-                                            onSelectionChanged = { settingsViewModel.onGeminiModelChange(it) },
+                                            selectedKey = currentModel.ifEmpty { uiState.availableModels.firstOrNull()?.name ?: "" },
+                                            onSelectionChanged = { 
+                                                when (aiProvider) {
+                                                    "GEMINI" -> settingsViewModel.onGeminiModelChange(it)
+                                                    "DEEPSEEK" -> settingsViewModel.onDeepseekModelChange(it)
+                                                }
+                                            },
                                             leadingIcon = { Icon(Icons.Rounded.Science, null, tint = MaterialTheme.colorScheme.secondary) }
                                         )
                                     }
                                 }
                             }
 
+                            // Prompt Behavior Section
                             SettingsSubsection(
                                 title = "Prompt Behavior",
                                 addBottomSpace = false
                             ) {
-                                GeminiSystemPromptItem(
-                                    systemPrompt = geminiSystemPrompt,
-                                    defaultPrompt = com.theveloper.pixelplay.data.preferences.UserPreferencesRepository.DEFAULT_SYSTEM_PROMPT,
-                                    onSystemPromptSave = { settingsViewModel.onGeminiSystemPromptChange(it) },
-                                    onReset = { settingsViewModel.resetGeminiSystemPrompt() },
-                                    title = "System Prompt",
-                                    subtitle = "Customize how the AI behaves."
-                                )
+                                when (aiProvider) {
+                                    "GEMINI" -> {
+                                        GeminiSystemPromptItem(
+                                            systemPrompt = geminiSystemPrompt,
+                                            defaultPrompt = com.theveloper.pixelplay.data.preferences.AiPreferencesRepository.DEFAULT_SYSTEM_PROMPT,
+                                            onSystemPromptSave = { settingsViewModel.onGeminiSystemPromptChange(it) },
+                                            onReset = { settingsViewModel.resetGeminiSystemPrompt() },
+                                            title = "System Prompt",
+                                            subtitle = "Customize how the AI behaves."
+                                        )
+                                    }
+                                    "DEEPSEEK" -> {
+                                        GeminiSystemPromptItem(
+                                            systemPrompt = deepseekSystemPrompt,
+                                            defaultPrompt = com.theveloper.pixelplay.data.preferences.AiPreferencesRepository.DEFAULT_DEEPSEEK_SYSTEM_PROMPT,
+                                            onSystemPromptSave = { settingsViewModel.onDeepseekSystemPromptChange(it) },
+                                            onReset = { settingsViewModel.resetDeepseekSystemPrompt() },
+                                            title = "System Prompt",
+                                            subtitle = "Customize how the AI behaves."
+                                        )
+                                    }
+                                }
                             }
                         }
                         SettingsCategory.BACKUP_RESTORE -> {
@@ -849,7 +985,7 @@ fun SettingsCategoryScreen(
                                     subtitle = "Player UI loading experiments and toggles.",
                                     leadingIcon = { Icon(Icons.Rounded.Science, null, tint = MaterialTheme.colorScheme.secondary) },
                                     trailingIcon = { Icon(Icons.Rounded.ChevronRight, "Open", tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                    onClick = { navController.navigate(Screen.Experimental.route) }
+                                    onClick = { navController.navigateSafely(Screen.Experimental.route) }
                                 )
                                 SettingsItem(
                                     title = "Test Setup Flow",
@@ -912,7 +1048,7 @@ fun SettingsCategoryScreen(
                                     subtitle = "App version, credits, and more.",
                                     leadingIcon = { Icon(Icons.Outlined.Info, null, tint = MaterialTheme.colorScheme.secondary) },
                                     trailingIcon = { Icon(Icons.Rounded.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                                    onClick = { navController.navigate("about") }
+                                    onClick = { navController.navigateSafely("about") }
                                 )
                             }
                         }
@@ -934,13 +1070,11 @@ fun SettingsCategoryScreen(
             }
         }
 
-        SettingsTopBar(
+        CollapsibleCommonTopBar(
             collapseFraction = collapseFraction,
             headerHeight = currentTopBarHeightDp,
-            onBackPressed = onBackClick,
+            onBackClick = onBackClick,
             title = category.title,
-            expandedStartPadding = 20.dp,
-            collapsedStartPadding = 68.dp,
             maxLines = titleMaxLines
         )
 
@@ -1340,7 +1474,7 @@ private fun BackupSectionSelectionDialog(
                                         )
                                     }
                                 },
-                                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                                colors = TopAppBarDefaults.topAppBarColors(
                                     containerColor = MaterialTheme.colorScheme.surfaceContainer
                                 )
                             )
@@ -1618,11 +1752,26 @@ private fun BackupSectionSelectableCard(
                     checked = selected,
                     onCheckedChange = { onToggle() },
                     enabled = enabled,
+                    thumbContent = {
+                        AnimatedContent(
+                            targetState = selected,
+                            transitionSpec = { fadeIn(tween(100)) togetherWith fadeOut(tween(100)) },
+                            label = "switch_thumb_icon"
+                        ) { isSelected ->
+                            Icon(
+                                imageVector = if (isSelected) Icons.Rounded.Check else Icons.Rounded.Close,
+                                contentDescription = null,
+                                modifier = Modifier.size(SwitchDefaults.IconSize)
+                            )
+                        }
+                    },
                     colors = SwitchDefaults.colors(
                         checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
                         checkedTrackColor = MaterialTheme.colorScheme.primary,
+                        checkedIconColor = MaterialTheme.colorScheme.primary,
                         uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant,
+                        uncheckedIconColor = MaterialTheme.colorScheme.surfaceVariant
                     )
                 )
             }
@@ -1793,7 +1942,7 @@ private fun ImportFileSelectionDialog(
                                         )
                                     }
                                 },
-                                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                                colors = TopAppBarDefaults.topAppBarColors(
                                     containerColor = MaterialTheme.colorScheme.surfaceContainer
                                 )
                             )
@@ -2117,12 +2266,12 @@ private fun ImportModuleSelectionDialog(
                                         )
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Rounded.ArrowBack,
+                                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
                                             contentDescription = "Back"
                                         )
                                     }
                                 },
-                                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                                colors = TopAppBarDefaults.topAppBarColors(
                                     containerColor = MaterialTheme.colorScheme.surfaceContainer
                                 )
                             )

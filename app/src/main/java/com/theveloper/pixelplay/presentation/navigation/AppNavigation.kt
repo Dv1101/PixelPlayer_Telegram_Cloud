@@ -31,6 +31,7 @@ import androidx.navigation.navArgument
 import com.theveloper.pixelplay.data.preferences.LaunchTab
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
 import com.theveloper.pixelplay.presentation.screens.AlbumDetailScreen
+import com.theveloper.pixelplay.presentation.screens.AccountsScreen
 import com.theveloper.pixelplay.presentation.screens.ArtistDetailScreen
 import com.theveloper.pixelplay.presentation.screens.ArtistSettingsScreen
 import com.theveloper.pixelplay.presentation.screens.DailyMixScreen
@@ -111,7 +112,7 @@ fun AppNavigation(
                     )
                 },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     HomeScreen(
                         navController = navController, 
                         paddingValuesParent = paddingValues, 
@@ -151,7 +152,7 @@ fun AppNavigation(
                     )
                 },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     SearchScreen(
                         paddingValues = paddingValues,
                         playerViewModel = playerViewModel,
@@ -191,7 +192,7 @@ fun AppNavigation(
                     )
                 },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     LibraryScreen(navController = navController, playerViewModel = playerViewModel)
                 }
             }
@@ -202,12 +203,31 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     SettingsScreen(
                         navController = navController,
                         playerViewModel = playerViewModel,
                         onNavigationIconClick = {
                             navController.popBackStack()
+                        }
+                    )
+                }
+            }
+            composable(
+                Screen.Accounts.route,
+                enterTransition = { enterTransition() },
+                exitTransition = { exitTransition() },
+                popEnterTransition = { popEnterTransition() },
+                popExitTransition = { popExitTransition() },
+            ) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
+                    AccountsScreen(
+                        onBackClick = { navController.popBackStack() },
+                        onOpenNeteaseDashboard = {
+                            navController.navigateSafely(Screen.NeteaseDashboard.route)
+                        },
+                        onOpenQqMusicDashboard = {
+                            navController.navigateSafely(Screen.QqMusicDashboard.route)
                         }
                     )
                 }
@@ -220,7 +240,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) { backStackEntry ->
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     val categoryId = backStackEntry.arguments?.getString("categoryId")
                     if (categoryId != null) {
                         SettingsCategoryScreen(
@@ -239,7 +259,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     PaletteStyleSettingsScreen(
                         playerViewModel = playerViewModel,
                         onBackClick = { navController.popBackStack() }
@@ -253,7 +273,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     ExperimentalSettingsScreen(
                         navController = navController,
                         playerViewModel = playerViewModel,
@@ -268,7 +288,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     DailyMixScreen(
                         playerViewModel = playerViewModel,
                         navController = navController
@@ -282,7 +302,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     RecentlyPlayedScreen(
                         playerViewModel = playerViewModel,
                         navController = navController
@@ -296,7 +316,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     StatsScreen(
                         navController = navController
                     )
@@ -313,7 +333,7 @@ fun AppNavigation(
                 val playlistId = backStackEntry.arguments?.getString("playlistId")
                 val playlistViewModel: PlaylistViewModel = hiltViewModel()
                 if (playlistId != null) {
-                    ScreenWrapper(navController = navController) {
+                    ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                         PlaylistDetailScreen(
                             playlistId = playlistId,
                             playerViewModel = playerViewModel,
@@ -333,7 +353,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     MashupScreen()
                 }
             }
@@ -347,7 +367,7 @@ fun AppNavigation(
             ) { backStackEntry ->
                 val genreId = backStackEntry.arguments?.getString("genreId")
                 if (genreId != null) {
-                    ScreenWrapper(navController = navController) {
+                    ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                         GenreDetailScreen(
                             navController = navController,
                             genreId = genreId,
@@ -368,7 +388,7 @@ fun AppNavigation(
             ) { backStackEntry ->
                 val albumId = backStackEntry.arguments?.getString("albumId")
                 if (albumId != null) {
-                    ScreenWrapper(navController = navController) {
+                    ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                         AlbumDetailScreen(
                             albumId = albumId,
                             navController = navController,
@@ -387,7 +407,7 @@ fun AppNavigation(
             ) { backStackEntry ->
                 val artistId = backStackEntry.arguments?.getString("artistId")
                 if (artistId != null) {
-                    ScreenWrapper(navController = navController) {
+                    ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                         ArtistDetailScreen(
                             artistId = artistId,
                             navController = navController,
@@ -403,7 +423,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     NavBarCornerRadiusScreen(navController)
                 }
             }
@@ -418,7 +438,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     EditTransitionScreen(navController = navController)
                 }
             }
@@ -429,7 +449,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     AboutScreen(
                         navController = navController,
                         viewModel = playerViewModel,
@@ -444,7 +464,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     ArtistSettingsScreen(navController = navController)
                 }
             }
@@ -455,7 +475,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     DelimiterConfigScreen(navController = navController)
                 }
             }
@@ -466,7 +486,7 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     EqualizerScreen(
                         navController = navController,
                         playerViewModel = playerViewModel
@@ -480,10 +500,36 @@ fun AppNavigation(
                 popEnterTransition = { popEnterTransition() },
                 popExitTransition = { popExitTransition() },
             ) {
-                ScreenWrapper(navController = navController) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     com.theveloper.pixelplay.presentation.screens.DeviceCapabilitiesScreen(
                         navController = navController,
                         playerViewModel = playerViewModel
+                    )
+                }
+            }
+            composable(
+                Screen.NeteaseDashboard.route,
+                enterTransition = { enterTransition() },
+                exitTransition = { exitTransition() },
+                popEnterTransition = { popEnterTransition() },
+                popExitTransition = { popExitTransition() },
+            ) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
+                    com.theveloper.pixelplay.presentation.netease.dashboard.NeteaseDashboardScreen(
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+            }
+            composable(
+                Screen.QqMusicDashboard.route,
+                enterTransition = { enterTransition() },
+                exitTransition = { exitTransition() },
+                popEnterTransition = { popEnterTransition() },
+                popExitTransition = { popExitTransition() },
+            ) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
+                    com.theveloper.pixelplay.presentation.qqmusic.dashboard.QqMusicDashboardScreen(
+                        onBack = { navController.popBackStack() }
                     )
                 }
             }
@@ -502,11 +548,14 @@ private enum class MainRootDirection {
     BACKWARD
 }
 
+// Faster transitions for bottom navigation bar switching
+private const val BOTTOM_NAV_TRANSITION_DURATION = 250
+
 private val MAIN_ROOT_TRANSITION_SPEC =
-    tween<IntOffset>(durationMillis = TRANSITION_DURATION, easing = FastOutSlowInEasing)
+    tween<IntOffset>(durationMillis = BOTTOM_NAV_TRANSITION_DURATION, easing = FastOutSlowInEasing)
 
 private val MAIN_ROOT_FADE_SPEC =
-    tween<Float>(durationMillis = TRANSITION_DURATION, easing = FastOutSlowInEasing)
+    tween<Float>(durationMillis = BOTTOM_NAV_TRANSITION_DURATION, easing = FastOutSlowInEasing)
 
 private fun mainRootDirection(
     fromRoute: String?,

@@ -1,28 +1,37 @@
 package com.theveloper.pixelplay.di
 
 import android.content.Context
+import androidx.annotation.OptIn
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.room.Room
+import androidx.room.RoomDatabase
+import androidx.sqlite.db.SupportSQLiteDatabase
 import coil.ImageLoader
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import com.theveloper.pixelplay.BuildConfig
 import com.theveloper.pixelplay.PixelPlayApplication
 import com.theveloper.pixelplay.data.database.AlbumArtThemeDao
 import com.theveloper.pixelplay.data.database.EngagementDao
 import com.theveloper.pixelplay.data.database.FavoritesDao
+import com.theveloper.pixelplay.data.database.GDriveDao
 import com.theveloper.pixelplay.data.database.LyricsDao
+import com.theveloper.pixelplay.data.database.LocalPlaylistDao
 import com.theveloper.pixelplay.data.database.MusicDao
 import com.theveloper.pixelplay.data.database.PixelPlayDatabase
 import com.theveloper.pixelplay.data.database.SearchHistoryDao
 import com.theveloper.pixelplay.data.database.TransitionDao
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
+import com.theveloper.pixelplay.data.preferences.PlaylistPreferencesRepository
 import com.theveloper.pixelplay.data.preferences.dataStore
 import com.theveloper.pixelplay.data.media.SongMetadataEditor
 import com.theveloper.pixelplay.data.network.deezer.DeezerApiService
+import com.theveloper.pixelplay.data.network.netease.NeteaseApiService
 import com.theveloper.pixelplay.data.network.lyrics.LrcLibApiService
 import com.theveloper.pixelplay.data.repository.ArtistImageRepository
 import com.theveloper.pixelplay.data.repository.LyricsRepository
@@ -61,6 +70,13 @@ object AppModule {
 
     @Singleton
     @Provides
+    fun provideGson(): com.google.gson.Gson {
+        return com.google.gson.Gson()
+    }
+
+    @OptIn(UnstableApi::class)
+    @Singleton
+    @Provides
     fun provideSessionToken(@ApplicationContext context: Context): androidx.media3.session.SessionToken {
         return androidx.media3.session.SessionToken(
             context,
@@ -94,7 +110,10 @@ object AppModule {
         ).addMigrations(
             PixelPlayDatabase.MIGRATION_3_4,
             PixelPlayDatabase.MIGRATION_4_5,
+            PixelPlayDatabase.MIGRATION_5_6,
             PixelPlayDatabase.MIGRATION_6_7,
+            PixelPlayDatabase.MIGRATION_7_8,
+            PixelPlayDatabase.MIGRATION_8_9,
             PixelPlayDatabase.MIGRATION_9_10,
             PixelPlayDatabase.MIGRATION_10_11,
             PixelPlayDatabase.MIGRATION_11_12,
@@ -104,8 +123,25 @@ object AppModule {
             PixelPlayDatabase.MIGRATION_15_16,
             PixelPlayDatabase.MIGRATION_16_17,
             PixelPlayDatabase.MIGRATION_17_18,
-            PixelPlayDatabase.MIGRATION_18_19
+            PixelPlayDatabase.MIGRATION_18_19,
+            PixelPlayDatabase.MIGRATION_19_20,
+            PixelPlayDatabase.MIGRATION_20_21,
+            PixelPlayDatabase.MIGRATION_21_22,
+            PixelPlayDatabase.MIGRATION_22_23,
+            PixelPlayDatabase.MIGRATION_23_24,
+            PixelPlayDatabase.MIGRATION_24_25,
+            PixelPlayDatabase.MIGRATION_25_26,
+            PixelPlayDatabase.MIGRATION_26_27,
+            PixelPlayDatabase.MIGRATION_27_28
         )
+            .addCallback(
+                object : RoomDatabase.Callback() {
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        super.onCreate(db)
+                        PixelPlayDatabase.installFavoriteSyncTriggers(db)
+                    }
+                }
+            )
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
     }
@@ -152,6 +188,24 @@ object AppModule {
         return database.lyricsDao()
     }
 
+    @Singleton
+    @Provides
+    fun provideGDriveDao(database: PixelPlayDatabase): GDriveDao {
+        return database.gdriveDao()
+    }
+
+    @Singleton
+    @Provides
+    fun provideLocalPlaylistDao(database: PixelPlayDatabase): LocalPlaylistDao {
+        return database.localPlaylistDao()
+    }
+
+    @Singleton
+    @Provides
+    fun provideQqMusicDao(database: PixelPlayDatabase): com.theveloper.pixelplay.data.database.QqMusicDao {
+        return database.qqmusicDao()
+    }
+
     @Provides
     @Singleton
     fun provideImageLoader(
@@ -180,12 +234,14 @@ object AppModule {
     fun provideLyricsRepository(
         @ApplicationContext context: Context,
         lrcLibApiService: LrcLibApiService,
-        lyricsDao: LyricsDao
+        lyricsDao: LyricsDao,
+        okHttpClient: OkHttpClient
     ): LyricsRepository {
         return LyricsRepositoryImpl(
             context = context,
             lrcLibApiService = lrcLibApiService,
-            lyricsDao = lyricsDao
+            lyricsDao = lyricsDao,
+            okHttpClient = okHttpClient
         )
     }
 
@@ -213,6 +269,12 @@ object AppModule {
         return database.telegramDao()
     }
 
+    @Singleton
+    @Provides
+    fun provideNeteaseDao(database: PixelPlayDatabase): com.theveloper.pixelplay.data.database.NeteaseDao {
+        return database.neteaseDao()
+    }
+
     @Provides
     @Singleton
     fun provideFolderTreeBuilder(): FolderTreeBuilder {
@@ -224,6 +286,7 @@ object AppModule {
     fun provideMusicRepository(
         @ApplicationContext context: Context,
         userPreferencesRepository: UserPreferencesRepository,
+        playlistPreferencesRepository: PlaylistPreferencesRepository,
         searchHistoryDao: SearchHistoryDao,
         musicDao: MusicDao,
         lyricsRepository: LyricsRepository,
@@ -238,6 +301,7 @@ object AppModule {
         return MusicRepositoryImpl(
             context = context,
             userPreferencesRepository = userPreferencesRepository,
+            playlistPreferencesRepository = playlistPreferencesRepository,
             searchHistoryDao = searchHistoryDao,
             musicDao = musicDao,
             lyricsRepository = lyricsRepository,
@@ -271,14 +335,20 @@ object AppModule {
     }
 
     /**
-     * Provee una instancia singleton de OkHttpClient con un interceptor de logging.
-     * Configured with 10s timeout and retry logic (2 retries).
+     * Provee una instancia singleton de OkHttpClient con logging e interceptor de User-Agent.
+     * Retry logic with backoff is handled in coroutine-based callers.
      */
     @Provides
     @Singleton
     fun provideOkHttpClient(): OkHttpClient {
         val loggingInterceptor = HttpLoggingInterceptor()
-        loggingInterceptor.setLevel(HttpLoggingInterceptor.Level.BODY)
+        loggingInterceptor.setLevel(
+            if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BODY
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
+        )
         
         // Connection pool with optimized connections for better performance
         val connectionPool = okhttp3.ConnectionPool(
@@ -292,6 +362,7 @@ object AppModule {
             .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
             .writeTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             // Add User-Agent header (required by some APIs)
             .addInterceptor { chain ->
                 val originalRequest = chain.request()
@@ -300,39 +371,13 @@ object AppModule {
                     .build()
                 chain.proceed(requestWithUserAgent)
             }
-            // Retry interceptor
-            .addInterceptor { chain ->
-                var request = chain.request()
-                var response: okhttp3.Response? = null
-                var lastException: java.io.IOException? = null
-                
-                // Retry up to 2 times
-                repeat(3) { attempt ->
-                    try {
-                        response?.close()
-                        response = chain.proceed(request)
-                        if (response!!.isSuccessful || response!!.code == 404) {
-                            return@addInterceptor response!!
-                        }
-                    } catch (e: java.io.IOException) {
-                        lastException = e
-                        if (attempt < 2) {
-                            // Exponential backoff: 500ms, 1000ms
-                            Thread.sleep((500L * (attempt + 1)))
-                        }
-                    }
-                }
-                
-                // If we have a response, return it; otherwise throw the last exception
-                response ?: throw (lastException ?: java.io.IOException("Unknown network error"))
-            }
             .addInterceptor(loggingInterceptor)
             .build()
     }
 
     /**
      * Provee una instancia de OkHttpClient con timeouts para búsquedas de lyrics.
-     * Includes DNS resolver, modern TLS, connection pool, and retry logic.
+     * Includes DNS resolver, modern TLS, connection pool, and connection retry.
      */
     @Provides
     @Singleton
@@ -371,7 +416,7 @@ object AppModule {
                 okhttp3.ConnectionSpec.CLEARTEXT
             ))
             .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
             .writeTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
             // Enable built-in retry on connection failure
             .retryOnConnectionFailure(true)

@@ -7,6 +7,7 @@ import com.theveloper.pixelplay.data.database.SongEntity // Necesario para datos
 import com.theveloper.pixelplay.data.database.AlbumEntity
 import com.theveloper.pixelplay.data.database.ArtistEntity
 import com.theveloper.pixelplay.data.model.Song // Para verificar el mapeo
+import com.theveloper.pixelplay.data.preferences.PlaylistPreferencesRepository
 import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
 import com.theveloper.pixelplay.data.database.FavoritesDao
 import com.theveloper.pixelplay.data.database.TelegramDao
@@ -34,6 +35,7 @@ class MusicRepositoryImplTest {
     private val mockSearchHistoryDao: SearchHistoryDao = mockk(relaxed = true) // relaxed para evitar mockear todos los métodos de historial
     private val mockContext: Context = mockk(relaxed = true) // relaxed para getAllUniqueAudioDirectories si no se testea a fondo aquí
     private val mockUserPreferencesRepository: UserPreferencesRepository = mockk()
+    private val mockPlaylistPreferencesRepository: PlaylistPreferencesRepository = mockk(relaxed = true)
     private val mockLyricsRepository: LyricsRepository = mockk(relaxed = true)
     private val mockTelegramDao: TelegramDao = mockk(relaxed = true)
     private val mockTelegramCacheManager: com.theveloper.pixelplay.data.telegram.TelegramCacheManager = mockk(relaxed = true)
@@ -65,7 +67,7 @@ class MusicRepositoryImplTest {
             println("getAllSongs called with: ${args[0]}, ${args[1]}")
             flowOf(emptyList())
         }
-        every { mockMusicDao.getArtistsWithSongCountsFiltered(any(), any()) } returns flowOf(emptyList())
+        every { mockMusicDao.getArtistsWithSongCountsFiltered(any(), any(), any()) } returns flowOf(emptyList())
 
         // Logic-based DAO stubs
         every { mockMusicDao.getSongs(any(), eq(true)) } answers {
@@ -73,11 +75,11 @@ class MusicRepositoryImplTest {
             if (allowedParams.isEmpty()) flowOf(emptyList()) else flowOf(emptyList()) // Placeholder, can be improved if needed
         }
         every { mockMusicDao.getSongs(any(), eq(false)) } returns flowOf(emptyList()) // Placeholder
-        every { mockMusicDao.getAlbums(any(), eq(true)) } answers {
+        every { mockMusicDao.getAlbums(any(), eq(true), any()) } answers {
             val allowedParams = firstArg<List<String>>()
             if (allowedParams.isEmpty()) flowOf(emptyList()) else flowOf(emptyList())
         }
-        every { mockMusicDao.getAlbums(any(), eq(false)) } returns flowOf(emptyList())
+        every { mockMusicDao.getAlbums(any(), eq(false), any()) } returns flowOf(emptyList())
         
         every { mockMusicDao.getArtists(any(), eq(true)) } answers {
              val allowedParams = firstArg<List<String>>()
@@ -95,6 +97,7 @@ class MusicRepositoryImplTest {
         musicRepository = MusicRepositoryImpl(
             context = mockContext,
             userPreferencesRepository = mockUserPreferencesRepository,
+            playlistPreferencesRepository = mockPlaylistPreferencesRepository,
             searchHistoryDao = mockSearchHistoryDao,
             musicDao = mockMusicDao,
             lyricsRepository = mockLyricsRepository,
@@ -193,7 +196,7 @@ class MusicRepositoryImplTest {
                 else -> album
             }
         }.filter { it.id == 201L || it.id == 203L }
-        every { mockMusicDao.getAlbums(any(), eq(true)) } returns flowOf(expectedAlbums)
+        every { mockMusicDao.getAlbums(any(), eq(true), any()) } returns flowOf(expectedAlbums)
 
         every { mockUserPreferencesRepository.allowedDirectoriesFlow } returns flowOf(allowedDirs)
         every { mockUserPreferencesRepository.initialSetupDoneFlow } returns flowOf(true)
@@ -228,7 +231,7 @@ class MusicRepositoryImplTest {
         val expectedArtists = allArtistEntities.map { 
             if (it.id == 101L) it.copy(trackCount = 2) else it 
         }.filter { it.id == 101L }
-        every { mockMusicDao.getArtistsWithSongCountsFiltered(any(), eq(true)) } returns flowOf(expectedArtists)
+        every { mockMusicDao.getArtistsWithSongCountsFiltered(any(), eq(true), any()) } returns flowOf(expectedArtists)
         
         every { mockUserPreferencesRepository.allowedDirectoriesFlow } returns flowOf(allowedDirs)
         every { mockUserPreferencesRepository.initialSetupDoneFlow } returns flowOf(true)
@@ -240,6 +243,72 @@ class MusicRepositoryImplTest {
         assertEquals(1, result.size)
         assertEquals(101L, result.first().id)
         assertEquals(2, result.first().songCount)
+    }
+
+    @Test
+    fun `getGenres deduplicates normalized genre ids`() = runTest(testDispatcher) {
+        every {
+            mockMusicDao.getUniqueGenres(
+                any<List<String>>(),
+                any<Boolean>()
+            )
+        } returns flowOf(listOf("Rock", " Rock ", "rock"))
+        every {
+            mockMusicDao.hasUnknownGenre(
+                any<List<String>>(),
+                any<Boolean>()
+            )
+        } returns flowOf(false)
+
+        val result = musicRepository.getGenres().first()
+
+        assertEquals(1, result.size)
+        assertEquals("rock", result.first().id)
+        assertEquals("Rock", result.first().name)
+    }
+
+    @Test
+    fun `getGenres does not append unknown when already present`() = runTest(testDispatcher) {
+        every {
+            mockMusicDao.getUniqueGenres(
+                any<List<String>>(),
+                any<Boolean>()
+            )
+        } returns flowOf(listOf("Unknown", " unknown "))
+        every {
+            mockMusicDao.hasUnknownGenre(
+                any<List<String>>(),
+                any<Boolean>()
+            )
+        } returns flowOf(true)
+
+        val result = musicRepository.getGenres().first()
+
+        assertEquals(1, result.size)
+        assertEquals(1, result.count { it.id == "unknown" })
+        assertEquals("Unknown", result.first().name)
+    }
+
+    @Test
+    fun `getGenres appends unknown only when needed`() = runTest(testDispatcher) {
+        every {
+            mockMusicDao.getUniqueGenres(
+                any<List<String>>(),
+                any<Boolean>()
+            )
+        } returns flowOf(listOf("Rock"))
+        every {
+            mockMusicDao.hasUnknownGenre(
+                any<List<String>>(),
+                any<Boolean>()
+            )
+        } returns flowOf(true)
+
+        val result = musicRepository.getGenres().first()
+
+        assertEquals(2, result.size)
+        assertTrue(result.any { it.id == "rock" })
+        assertEquals(1, result.count { it.id == "unknown" })
     }
 
     @Nested

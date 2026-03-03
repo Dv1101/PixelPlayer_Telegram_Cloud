@@ -2,16 +2,24 @@
 
 package com.theveloper.pixelplay.presentation.screens
 
+import com.theveloper.pixelplay.presentation.navigation.navigateSafely
+
 import android.os.Trace
+import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.updateTransition
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,15 +48,20 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.SelectAll
+import androidx.compose.material.icons.rounded.Deselect
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material.icons.rounded.ViewList
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material.icons.rounded.ViewModule
 import com.theveloper.pixelplay.presentation.components.ToggleSegmentButton
 import androidx.compose.material3.LoadingIndicator
@@ -56,20 +69,20 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.TabRowDefaults
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,12 +95,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -111,6 +134,7 @@ import com.theveloper.pixelplay.data.model.MusicFolder
 import com.theveloper.pixelplay.data.model.FolderSource
 import com.theveloper.pixelplay.data.model.Song
 import com.theveloper.pixelplay.data.model.SortOption
+import com.theveloper.pixelplay.data.model.StorageFilter
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
 import com.theveloper.pixelplay.presentation.components.NavBarContentHeight
 import com.theveloper.pixelplay.presentation.components.SmartImage
@@ -124,15 +148,19 @@ import com.theveloper.pixelplay.presentation.components.SongInfoBottomSheet
 import com.theveloper.pixelplay.presentation.components.subcomps.LibraryActionRow
 import com.theveloper.pixelplay.presentation.navigation.Screen
 import com.theveloper.pixelplay.presentation.components.MultiSelectionBottomSheet
+import com.theveloper.pixelplay.presentation.components.AlbumMultiSelectionOptionSheet
+import com.theveloper.pixelplay.presentation.components.PlaylistMultiSelectionBottomSheet
 import com.theveloper.pixelplay.presentation.components.PlaylistCreationTypeDialog
 import com.theveloper.pixelplay.presentation.components.CreateAiPlaylistDialog
 import com.theveloper.pixelplay.presentation.components.subcomps.SelectionActionRow
 import com.theveloper.pixelplay.presentation.components.subcomps.SelectionCountPill
 import com.theveloper.pixelplay.presentation.viewmodel.ColorSchemePair
+import com.theveloper.pixelplay.presentation.viewmodel.PlayerUiState
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.StablePlayerState
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistUiState
 import com.theveloper.pixelplay.presentation.viewmodel.PlaylistViewModel
+import com.theveloper.pixelplay.presentation.viewmodel.SongInfoBottomSheetViewModel
 import com.theveloper.pixelplay.data.model.LibraryTabId
 import com.theveloper.pixelplay.data.model.toLibraryTabIdOrNull
 import com.theveloper.pixelplay.data.preferences.LibraryNavigationMode
@@ -153,6 +181,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -165,12 +194,16 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -184,6 +217,8 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.ripple
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.theveloper.pixelplay.presentation.components.AutoScrollingTextOnDemand
 import com.theveloper.pixelplay.presentation.screens.CreatePlaylistDialog
 import com.theveloper.pixelplay.presentation.components.PlaylistBottomSheet
@@ -193,6 +228,8 @@ import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import java.util.Locale
 import androidx.compose.ui.platform.LocalContext
 import android.widget.Toast
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.ui.focus.focusModifier
 import com.theveloper.pixelplay.data.model.PlaylistShapeType
 import kotlinx.coroutines.flow.first
 import androidx.paging.compose.collectAsLazyPagingItems
@@ -201,10 +238,176 @@ import androidx.paging.LoadState
 import com.theveloper.pixelplay.presentation.components.ExpressiveScrollBar
 import com.theveloper.pixelplay.presentation.components.LibrarySortBottomSheet
 import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongListItem
+import com.theveloper.pixelplay.data.service.wear.PhoneWatchTransferState
+import com.theveloper.pixelplay.shared.WearTransferProgress
 import kotlin.math.abs
 
 val ListExtraBottomGap = 30.dp
 val PlayerSheetCollapsedCornerRadius = 32.dp
+private const val MAX_ALBUM_MULTI_SELECTION = 6
+private const val ENABLE_FOLDERS_SOURCE_TOGGLE = false
+private const val ENABLE_FOLDERS_STORAGE_FILTER = false
+
+@Composable
+private fun WatchTransferProgressDialog(
+    transfer: PhoneWatchTransferState,
+    onDismiss: () -> Unit,
+    onCancelTransfer: () -> Unit,
+) {
+    val context = LocalContext.current
+    val animatedProgress by animateFloatAsState(
+        targetValue = transfer.progress.coerceIn(0f, 1f),
+        animationSpec = tween(durationMillis = 300),
+        label = "WatchTransferProgressDialog"
+    )
+    val progressPercent = (animatedProgress * 100f).toInt().coerceIn(0, 100)
+    val bytesText = if (transfer.totalBytes > 0L) {
+        val sent = Formatter.formatFileSize(context, transfer.bytesTransferred)
+        val total = Formatter.formatFileSize(context, transfer.totalBytes)
+        "$sent / $total"
+    } else {
+        "Starting transfer..."
+    }
+    val statusText = when (transfer.status) {
+        WearTransferProgress.STATUS_TRANSFERRING -> "Transferring"
+        WearTransferProgress.STATUS_COMPLETED -> "Completed"
+        WearTransferProgress.STATUS_FAILED -> "Failed"
+        WearTransferProgress.STATUS_CANCELLED -> "Cancelled"
+        else -> "Preparing"
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = true,
+            dismissOnClickOutside = true
+        )
+    ) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            tonalElevation = 6.dp,
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Sending to Watch",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Box(
+                    modifier = Modifier
+                        .size(96.dp)
+                        .padding(vertical = 20.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    LoadingIndicator(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .scale(1.84f),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "$progressPercent%",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontSize = MaterialTheme.typography.labelLarge.fontSize * 1.4f
+                        ),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+                LinearWavyProgressIndicator(
+                    progress = { animatedProgress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(8.dp)
+                        .clip(RoundedCornerShape(50)),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                )
+                Text(
+                    text = transfer.songTitle.ifBlank { "Preparing transfer..." },
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "$statusText • $bytesText",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                transfer.error?.takeIf { it.isNotBlank() }?.let { errorText ->
+                    Text(
+                        text = errorText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center
+                    )
+                }
+                Button(
+                    modifier = Modifier.padding(top = 4.dp),
+                    onClick = onCancelTransfer,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
+                ) {
+                    Text(text = "Cancel transfer")
+                }
+            }
+        }
+    }
+}
+
+private data class LibraryScreenPlayerProjection(
+    val currentFolder: MusicFolder? = null,
+    val folderSourceRootPath: String = "",
+    val folderSource: FolderSource = FolderSource.INTERNAL,
+    val isFoldersPlaylistView: Boolean = false,
+    val currentStorageFilter: StorageFilter = StorageFilter.ALL,
+    val currentSongSortOption: SortOption = SortOption.SongTitleAZ,
+    val currentAlbumSortOption: SortOption = SortOption.AlbumTitleAZ,
+    val currentArtistSortOption: SortOption = SortOption.ArtistNameAZ,
+    val currentFavoriteSortOption: SortOption = SortOption.LikedSongDateLiked,
+    val currentFolderSortOption: SortOption = SortOption.FolderNameAZ,
+    val isAlbumsListView: Boolean = false,
+    val isSdCardAvailable: Boolean = false,
+    val musicFolders: ImmutableList<MusicFolder> = persistentListOf(),
+    val isLoadingLibraryCategories: Boolean = true,
+    val isGeneratingAiMetadata: Boolean = false,
+    val isSyncingLibrary: Boolean = false,
+    val isLoadingInitialSongs: Boolean = true
+)
+
+private fun PlayerUiState.toLibraryScreenProjection(): LibraryScreenPlayerProjection =
+    LibraryScreenPlayerProjection(
+        currentFolder = currentFolder,
+        folderSourceRootPath = folderSourceRootPath,
+        folderSource = folderSource,
+        isFoldersPlaylistView = isFoldersPlaylistView,
+        currentStorageFilter = currentStorageFilter,
+        currentSongSortOption = currentSongSortOption,
+        currentAlbumSortOption = currentAlbumSortOption,
+        currentArtistSortOption = currentArtistSortOption,
+        currentFavoriteSortOption = currentFavoriteSortOption,
+        currentFolderSortOption = currentFolderSortOption,
+        isAlbumsListView = isAlbumsListView,
+        isSdCardAvailable = isSdCardAvailable,
+        musicFolders = musicFolders,
+        isLoadingLibraryCategories = isLoadingLibraryCategories,
+        isGeneratingAiMetadata = isGeneratingAiMetadata,
+        isSyncingLibrary = isSyncingLibrary,
+        isLoadingInitialSongs = isLoadingInitialSongs
+    )
 
 @RequiresApi(Build.VERSION_CODES.R)
 @OptIn(ExperimentalPermissionsApi::class, ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
@@ -214,25 +417,26 @@ fun LibraryScreen(
     navController: NavController,
     playerViewModel: PlayerViewModel = hiltViewModel(),
     playlistViewModel: PlaylistViewModel = hiltViewModel(),
-    libraryViewModel: LibraryViewModel = hiltViewModel()
+    libraryViewModel: LibraryViewModel = hiltViewModel(),
+    songInfoBottomSheetViewModel: SongInfoBottomSheetViewModel = hiltViewModel()
 ) {
     // La recolección de estados de alto nivel se mantiene mínima.
     val context = LocalContext.current // Added context
-    val lastTabIndex by playerViewModel.lastLibraryTabIndexFlow.collectAsState()
-    val favoriteIds by playerViewModel.favoriteSongIds.collectAsState() // Reintroducir favoriteIds aquí
+    val lastTabIndex by playerViewModel.lastLibraryTabIndexFlow.collectAsStateWithLifecycle()
+    val favoriteIds by playerViewModel.favoriteSongIds.collectAsStateWithLifecycle() // Reintroducir favoriteIds aquí
     val scope = rememberCoroutineScope() // Mantener si se usa para acciones de UI
     val syncManager = playerViewModel.syncManager
     var isRefreshing by remember { mutableStateOf(false) }
-    val isSyncing by syncManager.isSyncing.collectAsState(initial = false)
-    val syncProgress by syncManager.syncProgress.collectAsState(initial = SyncProgress())
+    val isSyncing by syncManager.isSyncing.collectAsStateWithLifecycle(initialValue = false)
+    val syncProgress by syncManager.syncProgress.collectAsStateWithLifecycle(initialValue = SyncProgress())
 
     var showSongInfoBottomSheet by remember { mutableStateOf(false) }
     var showPlaylistBottomSheet by remember { mutableStateOf(false) }
     var playlistSheetSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
-    val selectedSongForInfo by playerViewModel.selectedSongForInfo.collectAsState()
-    val tabTitles by playerViewModel.libraryTabsFlow.collectAsState()
-    val currentTabId by playerViewModel.currentLibraryTabId.collectAsState()
-    val libraryNavigationMode by playerViewModel.libraryNavigationMode.collectAsState()
+    val selectedSongForInfo by playerViewModel.selectedSongForInfo.collectAsStateWithLifecycle()
+    val tabTitles by playerViewModel.libraryTabsFlow.collectAsStateWithLifecycle()
+    val currentTabId by playerViewModel.currentLibraryTabId.collectAsStateWithLifecycle()
+    val libraryNavigationMode by playerViewModel.libraryNavigationMode.collectAsStateWithLifecycle()
     val isCompactNavigation = libraryNavigationMode == LibraryNavigationMode.COMPACT_PILL
     val tabCount = tabTitles.size.coerceAtLeast(1)
     val normalizedLastTabIndex = positiveMod(lastTabIndex, tabCount)
@@ -253,14 +457,18 @@ fun LibraryScreen(
             )
         }
     }
-    val isSortSheetVisible by playerViewModel.isSortingSheetVisible.collectAsState()
-    val libraryUiState by playerViewModel.playerUiState.collectAsState()
-    val albums by playerViewModel.albumsFlow.collectAsState()
-    val artists by playerViewModel.artistsFlow.collectAsState()
-    val allSongs by playerViewModel.allSongsFlow.collectAsState()
-    val hasGeminiApiKey by playerViewModel.hasGeminiApiKey.collectAsState()
-    val isGeneratingAiPlaylist by playerViewModel.isGeneratingAiPlaylist.collectAsState()
-    val aiError by playerViewModel.aiError.collectAsState()
+    val isSortSheetVisible by playerViewModel.isSortingSheetVisible.collectAsStateWithLifecycle()
+    val isSendingToWatch by songInfoBottomSheetViewModel.isSendingToWatch.collectAsStateWithLifecycle()
+    val activeWatchTransfer by songInfoBottomSheetViewModel.activeWatchTransfer.collectAsStateWithLifecycle()
+    var showWatchTransferDialog by remember { mutableStateOf(false) }
+    val canNavigateBackInFolders by remember(playerViewModel) {
+        playerViewModel.playerUiState
+            .map { uiState -> uiState.currentFolder != null && uiState.folderBackGestureNavigationEnabled }
+            .distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = false)
+    val hasActiveAiProviderApiKey by playerViewModel.hasActiveAiProviderApiKey.collectAsStateWithLifecycle()
+    val isGeneratingAiPlaylist by playerViewModel.isGeneratingAiPlaylist.collectAsStateWithLifecycle()
+    val aiError by playerViewModel.aiError.collectAsStateWithLifecycle()
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var showPlaylistCreationTypeDialog by remember { mutableStateOf(false) }
     var showCreateAiPlaylistDialog by remember { mutableStateOf(false) }
@@ -275,12 +483,22 @@ fun LibraryScreen(
     var showReorderTabsSheet by remember { mutableStateOf(false) }
     var showTabSwitcherSheet by remember { mutableStateOf(false) }
 
+    LaunchedEffect(activeWatchTransfer?.requestId) {
+        if (activeWatchTransfer == null) {
+            showWatchTransferDialog = false
+        }
+    }
+
     // Multi-selection state
     val multiSelectionState = playerViewModel.multiSelectionStateHolder
-    val selectedSongs by multiSelectionState.selectedSongs.collectAsState()
-    val isSelectionMode by multiSelectionState.isSelectionMode.collectAsState()
-    val selectedSongIds by multiSelectionState.selectedSongIds.collectAsState()
+    val selectedSongs by multiSelectionState.selectedSongs.collectAsStateWithLifecycle()
+    val isSelectionMode by multiSelectionState.isSelectionMode.collectAsStateWithLifecycle()
+    val selectedSongIds by multiSelectionState.selectedSongIds.collectAsStateWithLifecycle()
     var showMultiSelectionSheet by remember { mutableStateOf(false) }
+    var selectedAlbums by remember { mutableStateOf<List<Album>>(emptyList()) }
+    val selectedAlbumIds = selectedAlbums.map { it.id }.toSet()
+    val isAlbumSelectionMode = selectedAlbums.isNotEmpty()
+    var showAlbumMultiSelectionSheet by remember { mutableStateOf(false) }
 
     var songsShowLocateButton by remember { mutableStateOf(false) }
     var likedShowLocateButton by remember { mutableStateOf(false) }
@@ -296,6 +514,55 @@ fun LibraryScreen(
 
     val onSongSelectionToggle: (Song) -> Unit = remember(multiSelectionState) {
         { song -> multiSelectionState.toggleSelection(song) }
+    }
+
+    val toggleAlbumSelection: (Album) -> Unit = remember(selectedAlbums, playerViewModel) {
+        { album ->
+            val existingIndex = selectedAlbums.indexOfFirst { it.id == album.id }
+            if (existingIndex >= 0) {
+                selectedAlbums = selectedAlbums.toMutableList().also { it.removeAt(existingIndex) }
+            } else if (selectedAlbums.size >= MAX_ALBUM_MULTI_SELECTION) {
+                playerViewModel.sendToast("You can select up to $MAX_ALBUM_MULTI_SELECTION albums")
+            } else {
+                selectedAlbums = selectedAlbums + album
+            }
+        }
+    }
+
+    val onAlbumLongPress: (Album) -> Unit = remember(toggleAlbumSelection) {
+        { album -> toggleAlbumSelection(album) }
+    }
+
+    val onAlbumSelectionToggle: (Album) -> Unit = remember(toggleAlbumSelection) {
+        { album -> toggleAlbumSelection(album) }
+    }
+
+    val getAlbumSelectionIndex: (Long) -> Int? = remember(selectedAlbums) {
+        { albumId ->
+            val index = selectedAlbums.indexOfFirst { it.id == albumId }
+            if (index >= 0) index + 1 else null
+        }
+    }
+
+    // Playlist multi-selection state and callbacks
+    val playlistMultiSelectionState = playerViewModel.playlistSelectionStateHolder
+    val selectedPlaylists by playlistMultiSelectionState.selectedPlaylists.collectAsStateWithLifecycle()
+    val selectedPlaylistIds by playlistMultiSelectionState.selectedPlaylistIds.collectAsStateWithLifecycle()
+    val isPlaylistSelectionMode by playlistMultiSelectionState.isSelectionMode.collectAsStateWithLifecycle()
+    var showPlaylistMultiSelectionSheet by remember { mutableStateOf(false) }
+    var showMergePlaylistDialog by remember { mutableStateOf(false) }
+    var pendingMergePlaylistIds by remember { mutableStateOf(emptyList<String>()) }
+
+    val onPlaylistLongPress: (com.theveloper.pixelplay.data.model.Playlist) -> Unit = remember(playlistMultiSelectionState) {
+        { playlist ->
+            // Only toggle selection, don't show sheet immediately (similar to songs multi-selection)
+            playlistMultiSelectionState.toggleSelection(playlist)
+            android.util.Log.d("PlaylistMultiSelect", "Toggled: ${playlist.name}, total selected: ${playlistMultiSelectionState.selectedPlaylists.value.size}")
+        }
+    }
+
+    val onPlaylistSelectionToggle: (com.theveloper.pixelplay.data.model.Playlist) -> Unit = remember(playlistMultiSelectionState) {
+        { playlist -> playlistMultiSelectionState.toggleSelection(playlist) }
     }
 
     val stableOnMoreOptionsClick: (Song) -> Unit = remember {
@@ -337,14 +604,50 @@ fun LibraryScreen(
         }
     }
 
-    BackHandler(
-        enabled =
-            currentTabId == LibraryTabId.FOLDERS &&
-                    libraryUiState.folderBackGestureNavigationEnabled &&
-                    libraryUiState.currentFolder != null &&
-                    !isSortSheetVisible
-    ) {
-        playerViewModel.navigateBackFolder()
+    val hasSelectionInCurrentTab = when (currentTabId) {
+        LibraryTabId.PLAYLISTS -> isPlaylistSelectionMode
+        LibraryTabId.ALBUMS -> isAlbumSelectionMode
+        LibraryTabId.SONGS,
+        LibraryTabId.LIKED,
+        LibraryTabId.FOLDERS -> isSelectionMode
+        LibraryTabId.ARTISTS -> false
+    }
+    val canHandleFolderBack =
+        currentTabId == LibraryTabId.FOLDERS &&
+            canNavigateBackInFolders &&
+            !isSortSheetVisible
+
+    BackHandler(enabled = hasSelectionInCurrentTab || canHandleFolderBack) {
+        when {
+            hasSelectionInCurrentTab -> {
+                when (currentTabId) {
+                    LibraryTabId.PLAYLISTS -> {
+                        playlistMultiSelectionState.clearSelection()
+                        showPlaylistMultiSelectionSheet = false
+                        showMergePlaylistDialog = false
+                        pendingMergePlaylistIds = emptyList()
+                    }
+
+                    LibraryTabId.ALBUMS -> {
+                        selectedAlbums = emptyList()
+                        showAlbumMultiSelectionSheet = false
+                    }
+
+                    LibraryTabId.SONGS,
+                    LibraryTabId.LIKED,
+                    LibraryTabId.FOLDERS -> {
+                        multiSelectionState.clearSelection()
+                        showMultiSelectionSheet = false
+                    }
+
+                    LibraryTabId.ARTISTS -> Unit
+                }
+            }
+
+            canHandleFolderBack -> {
+                playerViewModel.navigateBackFolder()
+            }
+        }
     }
 
     // Feedback for Playlist Creation
@@ -374,8 +677,8 @@ fun LibraryScreen(
         aiGenerationRequestedFromDialog = false
     }
 
-    LaunchedEffect(hasGeminiApiKey, showCreateAiPlaylistDialog) {
-        if (!hasGeminiApiKey && showCreateAiPlaylistDialog) {
+    LaunchedEffect(hasActiveAiProviderApiKey, showCreateAiPlaylistDialog) {
+        if (!hasActiveAiProviderApiKey && showCreateAiPlaylistDialog) {
             showCreateAiPlaylistDialog = false
             aiGenerationRequestedFromDialog = false
             playerViewModel.clearAiPlaylistError()
@@ -395,6 +698,11 @@ fun LibraryScreen(
 
         // Clear selection when switching tabs
         multiSelectionState.clearSelection()
+        playlistMultiSelectionState.clearSelection()
+        selectedAlbums = emptyList()
+        showMultiSelectionSheet = false
+        showPlaylistMultiSelectionSheet = false
+        showAlbumMultiSelectionSheet = false
     }
 
     val fabState by remember { derivedStateOf { currentTabIndex } } // UI sin cambios
@@ -446,20 +754,18 @@ fun LibraryScreen(
                 title = {
                     if (isCompactNavigation) {
                         LibraryNavigationPill(
+                            modifier = Modifier,
                             title = currentTabTitle,
                             isExpanded = showTabSwitcherSheet,
+                            showIcon = !isSendingToWatch,
                             iconRes = currentTab.iconRes(),
                             pageIndex = pagerState.currentPage,
+                            compressForWatchTransfer = isSendingToWatch,
                             onClick = {
                                 showTabSwitcherSheet = true
                             },
                             onArrowClick = { showTabSwitcherSheet = true }
                         )
-//                        LibraryNavigationPill(
-//                            title = currentTabTitle,
-//                            animationDirection = pillAnimationDirection,
-//                            onClick = { showTabSwitcherSheet = true }
-//                        )
                     } else {
                         Text(
                             modifier = Modifier.padding(start = 8.dp),
@@ -474,6 +780,41 @@ fun LibraryScreen(
                     }
                 },
                 actions = {
+                    if (isSendingToWatch) {
+                        val watchTransferProgress = activeWatchTransfer?.progress ?: 0f
+                        val watchTransferPercent = (watchTransferProgress * 100f).toInt().coerceIn(0, 100)
+                        Surface(
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .wrapContentWidth()
+                                .height(40.dp)
+                                .clip(CircleShape)
+                                .clickable(enabled = activeWatchTransfer != null) {
+                                    showWatchTransferDialog = true
+                                },
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .padding(horizontal = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.rounded_watch_arrow_down_24),
+                                    contentDescription = "Watch transfer",
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text(
+                                    text = "$watchTransferPercent%",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
                     FilledIconButton(
                         modifier = Modifier.padding(end = 14.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
@@ -481,7 +822,7 @@ fun LibraryScreen(
                             contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                         ),
                         onClick = {
-                            navController.navigate(Screen.Settings.route)
+                            navController.navigateSafely(Screen.Settings.route)
                         }
                     ) {
                         Icon(
@@ -504,11 +845,26 @@ fun LibraryScreen(
 //                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = gradientColors[0]
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
                 )
             )
         }
     ) { innerScaffoldPadding ->
+        val playerUiState by remember(playerViewModel) {
+            playerViewModel.playerUiState
+                .map { uiState -> uiState.toLibraryScreenProjection() }
+                .distinctUntilChanged()
+        }.collectAsStateWithLifecycle(initialValue = LibraryScreenPlayerProjection())
+        val isLibraryContentEmpty by remember(playerViewModel) {
+            combine(
+                playerViewModel.allSongsFlow,
+                playerViewModel.albumsFlow,
+                playerViewModel.artistsFlow
+            ) { allSongs, albums, artists ->
+                allSongs.isEmpty() && albums.isEmpty() && artists.isEmpty()
+            }.distinctUntilChanged()
+        }.collectAsStateWithLifecycle(initialValue = true)
+
         Box( // Box para permitir superposición del indicador de carga
             modifier = Modifier
                 .padding(top = innerScaffoldPadding.calculateTopPadding())
@@ -517,19 +873,20 @@ fun LibraryScreen(
             Column(
                 modifier = Modifier
                     // .padding(innerScaffoldPadding) // El padding ya está en el Box contenedor
-                    .background(brush = Brush.verticalGradient(gradientColors))
+//                    .background(brush = Brush.verticalGradient(gradientColors))
+                    .background(color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f))
                     .fillMaxSize()
             ) {
                 if (!isCompactNavigation) {
                     val showTabIndicator = false
-                    ScrollableTabRow(
+                    PrimaryScrollableTabRow(
                         selectedTabIndex = currentTabIndex,
                         containerColor = Color.Transparent,
                         edgePadding = 12.dp,
-                        indicator = { tabPositions ->
-                            if (showTabIndicator && currentTabIndex < tabPositions.size) {
+                        indicator = {
+                            if (showTabIndicator) {
                                 TabRowDefaults.PrimaryIndicator(
-                                    modifier = Modifier.tabIndicatorOffset(tabPositions[currentTabIndex]),
+                                    modifier = Modifier.tabIndicatorOffset(selectedTabIndex = currentTabIndex),
                                     height = 3.dp,
                                     color = MaterialTheme.colorScheme.primary
                                 )
@@ -604,7 +961,7 @@ fun LibraryScreen(
                 ) {
                     Column(Modifier.fillMaxSize()) {
                         // OPTIMIZACIÓN: La lógica de ordenamiento ahora es más eficiente.
-                        val availableSortOptions by playerViewModel.availableSortOptions.collectAsState()
+                        val availableSortOptions by playerViewModel.availableSortOptions.collectAsStateWithLifecycle()
                         val sanitizedSortOptions = remember(availableSortOptions, currentTabId) {
                             val cleaned = availableSortOptions.filterIsInstance<SortOption>()
                             val ensured = if (cleaned.any { option ->
@@ -622,10 +979,33 @@ fun LibraryScreen(
                             val distinctByKey = ensured.distinctBy { it.storageKey }
                             distinctByKey.ifEmpty { listOf(currentTabId.defaultSort) }
                         }
-                        val playerUiState by playerViewModel.playerUiState.collectAsState()
-                        val playlistUiState by playlistViewModel.uiState.collectAsState()
-                        val stablePlayerState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
+
+                        val playlistUiState by playlistViewModel.uiState.collectAsStateWithLifecycle()
+                        val visiblePlaylists = remember(
+                            playlistUiState.playlists,
+                            playlistUiState.showTelegramCloudPlaylists
+                        ) {
+                            if (playlistUiState.showTelegramCloudPlaylists) {
+                                playlistUiState.playlists
+                            } else {
+                                playlistUiState.playlists.filterNot { it.source == "TELEGRAM" }
+                            }
+                        }
+                        val stablePlayerState by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
                         val favoritePagingItems = libraryViewModel.favoritesPagingFlow.collectAsLazyPagingItems()
+
+                        LaunchedEffect(
+                            playlistUiState.showTelegramCloudPlaylists,
+                            selectedPlaylists
+                        ) {
+                            if (playlistUiState.showTelegramCloudPlaylists) return@LaunchedEffect
+
+                            selectedPlaylists
+                                .filter { it.source == "TELEGRAM" }
+                                .forEach { playlist ->
+                                    playlistMultiSelectionState.removeFromSelection(playlist.id)
+                                }
+                        }
 
                         val currentSelectedSortOption: SortOption? = when (currentTabId) {
                             LibraryTabId.SONGS -> playerUiState.currentSongSortOption
@@ -662,12 +1042,9 @@ fun LibraryScreen(
                             }
                         }
 
-                        //val playerUiState by playerViewModel.playerUiState.collectAsState()
-                        //val playerUiState by playerViewModel.playerUiState.collectAsState()
-
                         // Switch between normal action row and selection action row
                         AnimatedContent(
-                            targetState = isSelectionMode,
+                            targetState = isSelectionMode || isPlaylistSelectionMode || isAlbumSelectionMode,
                             label = "ActionRowModeSwitch",
                             transitionSpec = {
                                 (slideInHorizontally { -it } + fadeIn()) togetherWith
@@ -682,28 +1059,60 @@ fun LibraryScreen(
                                 .heightIn(min = 56.dp)
                         ) { inSelectionMode ->
                             if (inSelectionMode) {
-                                SelectionActionRow(
-                                    selectedCount = selectedSongs.size,
-                                    onSelectAll = {
-                                        val songsToSelect = when (tabTitles.getOrNull(currentTabIndex)?.toLibraryTabIdOrNull()) {
-                                            LibraryTabId.LIKED -> favoritePagingItems.itemSnapshotList.items
-                                            LibraryTabId.FOLDERS -> {
-                                                // If we are deep in a folder, select songs of that folder.
-                                                // If we are at root, there are no songs to select.
-                                                playerViewModel.playerUiState.value.currentFolder?.songs ?: emptyList()
+                                // Playlist selection row
+                                if (currentTabId == LibraryTabId.PLAYLISTS && isPlaylistSelectionMode) {
+                                    SelectionActionRow(
+                                        selectedCount = selectedPlaylists.size,
+                                        onSelectAll = {
+                                            playerViewModel.playlistSelectionStateHolder.selectAll(visiblePlaylists)
+                                        },
+                                        onDeselect = { playerViewModel.playlistSelectionStateHolder.clearSelection() },
+                                        onOptionsClick = { showPlaylistMultiSelectionSheet = true }
+                                    )
+                                } else if (currentTabId == LibraryTabId.ALBUMS && isAlbumSelectionMode) {
+                                    SelectionActionRow(
+                                        selectedCount = selectedAlbums.size,
+                                        onSelectAll = {
+                                            val remaining = MAX_ALBUM_MULTI_SELECTION - selectedAlbums.size
+                                            if (remaining <= 0) {
+                                                playerViewModel.sendToast("You can select up to $MAX_ALBUM_MULTI_SELECTION albums")
+                                            } else {
+                                                val albumsToAppend = playerViewModel.albumsFlow.value
+                                                    .filterNot { selectedAlbumIds.contains(it.id) }
+                                                    .take(remaining)
+                                                if (albumsToAppend.isNotEmpty()) {
+                                                    selectedAlbums = selectedAlbums + albumsToAppend
+                                                }
                                             }
-                                            // For SONGS and others fallback to all songs?
-                                            // Actually ALBUMS/ARTISTS don't show songs list directly, they show items.
-                                            // Selection mode is likely disabled there or not reachable.
-                                            // But for SONGS tab:
-                                            LibraryTabId.SONGS -> playerViewModel.allSongsFlow.value
-                                            else -> emptyList()
-                                        }
-                                        multiSelectionState.selectAll(songsToSelect)
-                                    },
-                                    onDeselect = { multiSelectionState.clearSelection() },
-                                    onOptionsClick = { showMultiSelectionSheet = true }
-                                )
+                                        },
+                                        onDeselect = { selectedAlbums = emptyList() },
+                                        onOptionsClick = { showAlbumMultiSelectionSheet = true }
+                                    )
+                                } else {
+                                    // Song selection row
+                                    SelectionActionRow(
+                                        selectedCount = selectedSongs.size,
+                                        onSelectAll = {
+                                            val songsToSelect = when (tabTitles.getOrNull(currentTabIndex)?.toLibraryTabIdOrNull()) {
+                                                LibraryTabId.LIKED -> favoritePagingItems.itemSnapshotList.items
+                                                LibraryTabId.FOLDERS -> {
+                                                    // If we are deep in a folder, select songs of that folder.
+                                                    // If we are at root, there are no songs to select.
+                                                    playerViewModel.playerUiState.value.currentFolder?.songs ?: emptyList()
+                                                }
+                                                // For SONGS and others fallback to all songs?
+                                                // Actually ALBUMS/ARTISTS don't show songs list directly, they show items.
+                                                // Selection mode is likely disabled there or not reachable.
+                                                // But for SONGS tab:
+                                                LibraryTabId.SONGS -> playerViewModel.allSongsFlow.value
+                                                else -> emptyList()
+                                            }
+                                            multiSelectionState.selectAll(songsToSelect)
+                                        },
+                                        onDeselect = { multiSelectionState.clearSelection() },
+                                        onOptionsClick = { showMultiSelectionSheet = true }
+                                    )
+                                }
                             } else {
                                 LibraryActionRow(
                                     modifier = Modifier
@@ -734,7 +1143,11 @@ fun LibraryScreen(
                                     onFolderClick = { playerViewModel.navigateToFolder(it) },
                                     onNavigateBack = { playerViewModel.navigateBackFolder() },
                                     isShuffleEnabled = stablePlayerState.isShuffleEnabled,
-                                    showStorageFilterButton = currentTabId == LibraryTabId.SONGS || currentTabId == LibraryTabId.ALBUMS,
+                                    showStorageFilterButton = currentTabId == LibraryTabId.SONGS ||
+                                        currentTabId == LibraryTabId.ALBUMS ||
+                                        currentTabId == LibraryTabId.ARTISTS ||
+                                        currentTabId == LibraryTabId.LIKED ||
+                                        (ENABLE_FOLDERS_STORAGE_FILTER && currentTabId == LibraryTabId.FOLDERS),
                                     currentStorageFilter = playerUiState.currentStorageFilter,
                                     onStorageFilterClick = { playerViewModel.toggleStorageFilter() }
                                 )
@@ -754,6 +1167,7 @@ fun LibraryScreen(
 
                             val isAlbumTab = currentTabId == LibraryTabId.ALBUMS
                             val isFoldersTab = currentTabId == LibraryTabId.FOLDERS
+                            val isPlaylistsTab = currentTabId == LibraryTabId.PLAYLISTS
 
                             LibrarySortBottomSheet(
                                 title = "Sort by",
@@ -764,10 +1178,24 @@ fun LibraryScreen(
                                     onSortOptionChanged(option)
                                     playerViewModel.hideSortingSheet()
                                 },
-                                showViewToggle = isFoldersTab,
-                                viewToggleChecked = playerUiState.isFoldersPlaylistView,
+                                showViewToggle = isFoldersTab || isPlaylistsTab,
+                                viewSectionTitle = if (isPlaylistsTab) "Cloud" else "View",
+                                viewToggleLabel = if (isPlaylistsTab) {
+                                    "Telegram Cloud Channels"
+                                } else {
+                                    "Playlist View"
+                                },
+                                viewToggleChecked = if (isPlaylistsTab) {
+                                    playlistUiState.showTelegramCloudPlaylists
+                                } else {
+                                    playerUiState.isFoldersPlaylistView
+                                },
                                 onViewToggleChange = { isChecked ->
-                                    playerViewModel.setFoldersPlaylistView(isChecked)
+                                    if (isPlaylistsTab) {
+                                        playlistViewModel.setShowTelegramCloudPlaylists(isChecked)
+                                    } else {
+                                        playerViewModel.setFoldersPlaylistView(isChecked)
+                                    }
                                 },
                                 viewToggleContent = if (isAlbumTab) {
                                     {
@@ -806,12 +1234,12 @@ fun LibraryScreen(
                                                 activeCornerRadius = 32.dp,
                                                 onClick = { playerViewModel.setAlbumsListView(true) },
                                                 text = "List",
-                                                imageVector = Icons.Rounded.ViewList
+                                                imageVector = Icons.AutoMirrored.Rounded.ViewList
                                             )
                                         }
                                     }
                                 } else null,
-                                sourceToggleContent = if (isFoldersTab) {
+                                sourceToggleContent = if (isFoldersTab && ENABLE_FOLDERS_SOURCE_TOGGLE) {
                                     {
                                         Row(
                                             modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -881,9 +1309,7 @@ fun LibraryScreen(
                                         // Use Paging 3 flow from LibraryStateHolder
                                         val allSongsLazyPagingItems = libraryViewModel.songsPagingFlow.collectAsLazyPagingItems()
                                         // We can use libraryViewModel.isLoadingLibrary or similar if needed for global loading state
-                                        val isLibraryLoading by libraryViewModel.isLoadingLibrary.collectAsState()
-                                        val stablePlayerState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
-                                        val playerUiState by playerViewModel.playerUiState.collectAsState()
+                                        val isLibraryLoading by libraryViewModel.isLoadingLibrary.collectAsStateWithLifecycle()
 
                                         LibrarySongsTab(
                                             songs = allSongsLazyPagingItems,
@@ -901,18 +1327,20 @@ fun LibraryScreen(
                                             selectedSongIds = selectedSongIds,
                                             onSongLongPress = onSongLongPress,
                                             onSongSelectionToggle = onSongSelectionToggle,
+                                            getSelectionIndex = playerViewModel.multiSelectionStateHolder::getSelectionIndex,
                                             onLocateCurrentSongVisibilityChanged = { songsShowLocateButton = it },
                                             onRegisterLocateCurrentSongAction = { songsLocateAction = it },
-                                            sortOption = playerUiState.currentSongSortOption
+                                            sortOption = playerUiState.currentSongSortOption,
+                                            storageFilter = playerUiState.currentStorageFilter
                                         )
                                     }
                                     LibraryTabId.ALBUMS -> {
-                                        val albums by playerViewModel.albumsFlow.collectAsState()
-                                        val isLoading = libraryUiState.isLoadingLibraryCategories
+                                        val albums by playerViewModel.albumsFlow.collectAsStateWithLifecycle()
+                                        val isLoading = playerUiState.isLoadingLibraryCategories
 
                                         val stableOnAlbumClick: (Long) -> Unit = remember(navController) {
                                             { albumId: Long ->
-                                                navController.navigate(Screen.AlbumDetail.createRoute(albumId))
+                                                navController.navigateSafely(Screen.AlbumDetail.createRoute(albumId))
                                             }
                                         }
                                         LibraryAlbumsTab(
@@ -922,13 +1350,19 @@ fun LibraryScreen(
                                             bottomBarHeight = bottomBarHeightDp,
                                             onAlbumClick = stableOnAlbumClick,
                                             isRefreshing = isRefreshing,
-                                            onRefresh = onRefresh
+                                            onRefresh = onRefresh,
+                                            isSelectionMode = isAlbumSelectionMode,
+                                            selectedAlbumIds = selectedAlbumIds,
+                                            onAlbumLongPress = onAlbumLongPress,
+                                            onAlbumSelectionToggle = onAlbumSelectionToggle,
+                                            getSelectionIndex = getAlbumSelectionIndex,
+                                            storageFilter = playerUiState.currentStorageFilter
                                         )
                                     }
 
                                     LibraryTabId.ARTISTS -> {
-                                        val artists by playerViewModel.artistsFlow.collectAsState()
-                                        val isLoading = libraryUiState.isLoadingLibraryCategories
+                                        val artists by playerViewModel.artistsFlow.collectAsStateWithLifecycle()
+                                        val isLoading = playerUiState.isLoadingLibraryCategories
 
                                         LibraryArtistsTab(
                                             artists = artists,
@@ -936,26 +1370,33 @@ fun LibraryScreen(
                                             playerViewModel = playerViewModel,
                                             bottomBarHeight = bottomBarHeightDp,
                                             onArtistClick = { artistId ->
-                                                navController.navigate(
+                                                navController.navigateSafely(
                                                     Screen.ArtistDetail.createRoute(
                                                         artistId
                                                     )
                                                 )
                                             },
                                             isRefreshing = isRefreshing,
-                                            onRefresh = onRefresh
+                                            onRefresh = onRefresh,
+                                            storageFilter = playerUiState.currentStorageFilter
                                         )
                                     }
 
                                     LibraryTabId.PLAYLISTS -> {
-                                        val currentPlaylistUiState by playlistViewModel.uiState.collectAsState()
                                         LibraryPlaylistsTab(
-                                            playlistUiState = currentPlaylistUiState,
+                                            playlistUiState = playlistUiState,
+                                            filteredPlaylists = visiblePlaylists,
                                             navController = navController,
                                             playerViewModel = playerViewModel,
                                             bottomBarHeight = bottomBarHeightDp,
                                             isRefreshing = isRefreshing,
-                                            onRefresh = onRefresh
+                                            onRefresh = onRefresh,
+                                            // Playlist multi-selection
+                                            isSelectionMode = isPlaylistSelectionMode,
+                                            selectedPlaylistIds = selectedPlaylistIds,
+                                            onPlaylistLongPress = onPlaylistLongPress,
+                                            onPlaylistSelectionToggle = onPlaylistSelectionToggle,
+                                            onPlaylistOptionsClick = { showPlaylistMultiSelectionSheet = true }
                                         )
                                     }
 
@@ -976,7 +1417,8 @@ fun LibraryScreen(
                                             onSongSelectionToggle = onSongSelectionToggle,
                                             getSelectionIndex = playerViewModel.multiSelectionStateHolder::getSelectionIndex,
                                             onLocateCurrentSongVisibilityChanged = { likedShowLocateButton = it },
-                                            onRegisterLocateCurrentSongAction = { likedLocateAction = it }
+                                            onRegisterLocateCurrentSongAction = { likedLocateAction = it },
+                                            storageFilter = playerUiState.currentStorageFilter
                                         )
                                     }
 
@@ -990,11 +1432,9 @@ fun LibraryScreen(
                                         }
 
                                         if (hasPermission) {
-                                            val playerUiState by playerViewModel.playerUiState.collectAsState()
                                             val folders = playerUiState.musicFolders
                                             val currentFolder = playerUiState.currentFolder
                                             val isLoading = playerUiState.isLoadingLibraryCategories
-                                            val stablePlayerState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
 
                                             LibraryFoldersTab(
                                                 folders = folders,
@@ -1006,7 +1446,7 @@ fun LibraryScreen(
                                                 onFolderClick = { folderPath -> playerViewModel.navigateToFolder(folderPath) },
                                                 onFolderAsPlaylistClick = { folder ->
                                                     val encodedPath = Uri.encode(folder.path)
-                                                    navController.navigate(
+                                                    navController.navigateSafely(
                                                         Screen.PlaylistDetail.createRoute(
                                                             "${PlaylistViewModel.FOLDER_PLAYLIST_PREFIX}$encodedPath"
                                                         )
@@ -1054,8 +1494,13 @@ fun LibraryScreen(
                             }
 
                             // Floating selection count pill overlay
+                            val selectionCount = when {
+                                currentTabId == LibraryTabId.PLAYLISTS && isPlaylistSelectionMode -> selectedPlaylists.size
+                                currentTabId == LibraryTabId.ALBUMS && isAlbumSelectionMode -> selectedAlbums.size
+                                else -> selectedSongs.size
+                            }
                             SelectionCountPill(
-                                selectedCount = selectedSongs.size,
+                                selectedCount = selectionCount,
                                 modifier = Modifier
                                     .align(Alignment.TopCenter)
                                     .zIndex(1f)
@@ -1063,8 +1508,7 @@ fun LibraryScreen(
                         }
                     }
                 }
-                val globalLoadingState by playerViewModel.playerUiState.collectAsState()
-                if (globalLoadingState.isGeneratingAiMetadata) {
+                if (playerUiState.isGeneratingAiMetadata) {
                     Surface( // Fondo semitransparente para el indicador
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f)
@@ -1081,7 +1525,13 @@ fun LibraryScreen(
                             }
                         }
                     }
-                } else if (globalLoadingState.isSyncingLibrary || ((globalLoadingState.isLoadingInitialSongs || globalLoadingState.isLoadingLibraryCategories) && (allSongs.isEmpty() && albums.isEmpty() && artists.isEmpty()))) {
+                } else if (
+                    playerUiState.isSyncingLibrary ||
+                    (
+                        (playerUiState.isLoadingInitialSongs || playerUiState.isLoadingLibraryCategories) &&
+                            isLibraryContentEmpty
+                        )
+                ) {
                     Surface(
                         modifier = Modifier.fillMaxSize(),
                         color = MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f)
@@ -1144,27 +1594,28 @@ fun LibraryScreen(
             showCreatePlaylistDialog = true
         },
         onAiSelected = {
-            if (hasGeminiApiKey) {
+            if (hasActiveAiProviderApiKey) {
                 showPlaylistCreationTypeDialog = false
                 playerViewModel.clearAiPlaylistError()
                 showCreateAiPlaylistDialog = true
             } else {
-                Toast.makeText(context, "Set your Gemini API key first", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Set your AI provider API key first", Toast.LENGTH_SHORT).show()
             }
         },
-        isAiEnabled = hasGeminiApiKey,
+        isAiEnabled = hasActiveAiProviderApiKey,
         onSetupAiClick = {
-            navController.navigate(Screen.SettingsCategory.createRoute("ai"))
+            navController.navigateSafely(Screen.SettingsCategory.createRoute("ai"))
         }
     )
 
+    val allSongsForPlaylistDialog by playerViewModel.allSongsFlow.collectAsStateWithLifecycle()
     CreatePlaylistDialog(
         visible = showCreatePlaylistDialog,
-        allSongs = allSongs,
+        allSongs = allSongsForPlaylistDialog,
         onDismiss = { showCreatePlaylistDialog = false },
         onGenerateClick = {
             showCreatePlaylistDialog = false
-            if (hasGeminiApiKey) {
+            if (hasActiveAiProviderApiKey) {
                 playerViewModel.clearAiPlaylistError()
                 showCreateAiPlaylistDialog = true
             } else {
@@ -1193,7 +1644,7 @@ fun LibraryScreen(
     )
 
     CreateAiPlaylistDialog(
-        visible = showCreateAiPlaylistDialog && hasGeminiApiKey,
+        visible = showCreateAiPlaylistDialog && hasActiveAiProviderApiKey,
         isGenerating = isGeneratingAiPlaylist,
         error = aiError,
         onDismiss = {
@@ -1212,6 +1663,18 @@ fun LibraryScreen(
             )
         }
     )
+
+    if (showWatchTransferDialog && activeWatchTransfer != null) {
+        val currentWatchTransfer = activeWatchTransfer!!
+        WatchTransferProgressDialog(
+            transfer = currentWatchTransfer,
+            onDismiss = { showWatchTransferDialog = false },
+            onCancelTransfer = {
+                songInfoBottomSheetViewModel.cancelWatchTransfer(currentWatchTransfer.requestId)
+                showWatchTransferDialog = false
+            }
+        )
+    }
 
     if (showSongInfoBottomSheet && selectedSongForInfo != null) {
         val currentSong = selectedSongForInfo
@@ -1249,11 +1712,11 @@ fun LibraryScreen(
                 },
                 onDeleteFromDevice = playerViewModel::deleteFromDevice,
                 onNavigateToAlbum = {
-                    navController.navigate(Screen.AlbumDetail.createRoute(currentSong.albumId))
+                    navController.navigateSafely(Screen.AlbumDetail.createRoute(currentSong.albumId))
                     showSongInfoBottomSheet = false
                 },
                 onNavigateToArtist = {
-                    navController.navigate(Screen.ArtistDetail.createRoute(currentSong.artistId))
+                    navController.navigateSafely(Screen.ArtistDetail.createRoute(currentSong.artistId))
                     showSongInfoBottomSheet = false
                 },
                 onEditSong = { newTitle, newArtist, newAlbum, newGenre, newLyrics, newTrackNumber, coverArtUpdate ->
@@ -1262,13 +1725,14 @@ fun LibraryScreen(
                 generateAiMetadata = { fields ->
                     playerViewModel.generateAiMetadata(currentSong, fields)
                 },
-                removeFromListTrigger = {}
+                removeFromListTrigger = {},
+                songInfoViewModel = songInfoBottomSheetViewModel
             )
         }
     }
 
     if (showPlaylistBottomSheet) {
-        val playlistUiState by playlistViewModel.uiState.collectAsState()
+        val playlistUiState by playlistViewModel.uiState.collectAsStateWithLifecycle()
 
         PlaylistBottomSheet(
             playlistUiState = playlistUiState,
@@ -1327,6 +1791,54 @@ fun LibraryScreen(
         )
     }
 
+    // Album Multi-Selection Option Sheet
+    if (showAlbumMultiSelectionSheet && selectedAlbums.isNotEmpty()) {
+        AlbumMultiSelectionOptionSheet(
+            selectedAlbums = selectedAlbums,
+            maxSelection = MAX_ALBUM_MULTI_SELECTION,
+            onDismiss = { showAlbumMultiSelectionSheet = false },
+            onQueueAndPlay = {
+                playerViewModel.queueAndPlaySelectedAlbums(selectedAlbums)
+                selectedAlbums = emptyList()
+                showAlbumMultiSelectionSheet = false
+            }
+        )
+    }
+
+    // Playlist Multi-Selection Bottom Sheet
+    if (showPlaylistMultiSelectionSheet && selectedPlaylists.isNotEmpty()) {
+        val activity = context as? android.app.Activity
+
+        PlaylistMultiSelectionBottomSheet(
+            selectedPlaylists = selectedPlaylists,
+            onDismiss = {
+                showPlaylistMultiSelectionSheet = false
+            },
+            onDeleteAll = {
+                playlistViewModel.deletePlaylistsInBatch(selectedPlaylistIds.toList())
+                showPlaylistMultiSelectionSheet = false
+                playlistMultiSelectionState.clearSelection()
+            },
+            onExportAll = {
+                playlistViewModel.exportPlaylistsAsM3u(selectedPlaylistIds.toList())
+                showPlaylistMultiSelectionSheet = false
+                playlistMultiSelectionState.clearSelection()
+            },
+            onMergeAll = {
+                pendingMergePlaylistIds = selectedPlaylistIds.toList()
+                showMergePlaylistDialog = true
+                showPlaylistMultiSelectionSheet = false
+            },
+            onShareAll = {
+                activity?.let {
+                    playlistViewModel.shareSelectedPlaylistsAsZip(selectedPlaylistIds.toList(), it)
+                }
+                showPlaylistMultiSelectionSheet = false
+                playlistMultiSelectionState.clearSelection()
+            }
+        )
+    }
+
     if (showTabSwitcherSheet) {
         LibraryTabSwitcherSheet(
             tabs = tabTitles,
@@ -1362,6 +1874,66 @@ fun LibraryScreen(
                 playerViewModel.resetLibraryTabsOrder()
             },
             onDismiss = { showReorderTabsSheet = false }
+        )
+    }
+
+    // Merge Playlists Dialog
+    if (showMergePlaylistDialog && pendingMergePlaylistIds.isNotEmpty()) {
+        var mergePlaylistName by remember { mutableStateOf("") }
+        
+        AlertDialog(
+            onDismissRequest = { 
+                showMergePlaylistDialog = false
+                pendingMergePlaylistIds = emptyList()
+                mergePlaylistName = ""
+            },
+            title = { Text("Merge Playlists") },
+            text = {
+                Column {
+                    Text("Enter a name for the merged playlist:")
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = mergePlaylistName,
+                        onValueChange = { mergePlaylistName = it },
+                        placeholder = { Text("Merged Playlist") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "This will merge ${pendingMergePlaylistIds.size} selected playlists into one.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (mergePlaylistName.isNotEmpty()) {
+                            playlistViewModel.mergePlaylistsIntoOne(
+                                pendingMergePlaylistIds,
+                                mergePlaylistName
+                            )
+                            playlistMultiSelectionState.clearSelection()
+                            showMergePlaylistDialog = false
+                            pendingMergePlaylistIds = emptyList()
+                            mergePlaylistName = ""
+                        }
+                    }
+                ) {
+                    Text("Merge")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { 
+                    showMergePlaylistDialog = false
+                    pendingMergePlaylistIds = emptyList()
+                    mergePlaylistName = ""
+                }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }
@@ -1406,138 +1978,280 @@ private fun CompactLibraryPagerIndicator(
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun LibraryNavigationPill(
+    modifier: Modifier = Modifier,
     title: String,
     isExpanded: Boolean,
     iconRes: Int,
+    showIcon: Boolean = true,
     pageIndex: Int,
+    compressForWatchTransfer: Boolean,
     onClick: () -> Unit,
     onArrowClick: () -> Unit
 ) {
     data class PillState(val pageIndex: Int, val iconRes: Int, val title: String)
 
-    val pillRadius = 26.dp
+    val pillRadius = 50.dp//26.dp
     val innerRadius = 4.dp
-    // Radio para cuando está expandido/seleccionado (totalmente redondo)
-    val expandedRadius = 60.dp
+    val titleHorizontalPadding = 14.dp
+    val titleVerticalPadding = 10.dp
+    val titleIconSize = 22.dp
+    val titleIconSpacing = 10.dp
+    val pillHeight = 52.dp
+    val arrowContentWidth = 36.dp
+    val pillGap = 4.dp
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
+    var availableWidthPx by remember { mutableStateOf(0) }
 
-    // Animación Esquina Flecha (Interna):
-    // Depende de 'isExpanded':
-    // - true: Se vuelve redonda (expandedRadius/pillRadius) separándose visualmente.
-    // - false: Se mantiene recta (innerRadius) pareciendo unida al título.
     val animatedArrowCorner by animateDpAsState(
         targetValue = if (isExpanded) pillRadius else innerRadius,
         label = "ArrowCornerAnimation"
+    )
+    val compressionProgress by animateFloatAsState(
+        targetValue = if (compressForWatchTransfer) 1f else 0f,
+        label = "LibraryPillCompression"
     )
 
     val arrowRotation by animateFloatAsState(
         targetValue = if (isExpanded) 180f else 0f,
         label = "ArrowRotation"
     )
+    val targetArrowHorizontalPadding =
+        LibraryNavigationPillArrowPaddingExpanded -
+            (LibraryNavigationPillArrowPaddingExpanded - LibraryNavigationPillArrowPaddingCompressed) *
+            compressionProgress
+    val animatedArrowHorizontalPadding by animateDpAsState(
+        targetValue = targetArrowHorizontalPadding,
+        label = "LibraryPillArrowPadding"
+    )
 
-    // IntrinsicSize.Min en el Row + fillMaxHeight en los hijos asegura misma altura
-    Row(
-        modifier = Modifier
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
             .padding(start = 4.dp)
-            .height(IntrinsicSize.Min),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+            .onSizeChanged { availableWidthPx = it.width },
+        contentAlignment = Alignment.CenterStart
     ) {
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = pillRadius,
-                bottomStart = pillRadius,
-                topEnd = innerRadius,
-                bottomEnd = innerRadius
-            ),
-            tonalElevation = 8.dp,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier
-                .fillMaxHeight()
-                .clip(
-                    RoundedCornerShape(
-                        topStart = pillRadius,
-                        bottomStart = pillRadius,
-                        topEnd = innerRadius,
-                        bottomEnd = innerRadius
-                    )
-                )
-                .clickable(onClick = onClick)
+        val baseTitleStyle = rememberLibraryNavigationPillTitleStyle(
+            widthAxis = LibraryNavigationPillTitleWidthMax
+        )
+        val idealTextWidth = with(density) {
+            textMeasurer.measure(
+                text = AnnotatedString(title),
+                style = baseTitleStyle,
+                maxLines = 1,
+                softWrap = false,
+            ).size.width.toDp()
+        }
+        val idealTitleWidth = idealTextWidth +
+            titleHorizontalPadding * 2 +
+            titleIconSize +
+            titleIconSpacing
+        val availableWidth = if (availableWidthPx > 0) {
+            with(density) { availableWidthPx.toDp() }
+        } else {
+            idealTitleWidth + arrowContentWidth + (targetArrowHorizontalPadding * 2) + pillGap
+        }
+        val targetArrowWidth = arrowContentWidth + (targetArrowHorizontalPadding * 2)
+        val maxTitleWidth = (availableWidth - targetArrowWidth - pillGap).coerceAtLeast(0.dp)
+        val naturalTitleWidth = minOf(idealTitleWidth, maxTitleWidth)
+        val minCompressedTitleWidth = (
+            titleHorizontalPadding * 2 +
+                titleIconSize +
+                titleIconSpacing +
+                LibraryNavigationPillMinimumTextWidth
+            ).coerceAtMost(maxTitleWidth)
+        val forcedCompressionWidth = minOf(
+            LibraryNavigationPillForcedCompressionWidth,
+            (naturalTitleWidth - minCompressedTitleWidth).coerceAtLeast(0.dp),
+        )
+        val targetTitleWidth = (
+            naturalTitleWidth - (forcedCompressionWidth * compressionProgress)
+            ).coerceAtLeast(minCompressedTitleWidth)
+        val widthCompressionRatio = if (idealTitleWidth.value > 0f) {
+            (targetTitleWidth.value / idealTitleWidth.value).coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+        val widthAxisBySpace = LibraryNavigationPillTitleWidthMin +
+            (LibraryNavigationPillTitleWidthMax - LibraryNavigationPillTitleWidthMin) *
+            widthCompressionRatio.coerceIn(0f, 1f)
+        val forcedWidthAxis = LibraryNavigationPillTitleWidthMax -
+            (LibraryNavigationPillTitleWidthMax - LibraryNavigationPillCompressedWidthAxis) *
+            compressionProgress
+        val targetWidthAxis = minOf(widthAxisBySpace, forcedWidthAxis)
+        val animatedTitleWidth by animateDpAsState(
+            targetValue = targetTitleWidth,
+            label = "LibraryPillTitleWidth"
+        )
+        val animatedWidthAxis by animateFloatAsState(
+            targetValue = targetWidthAxis,
+            label = "LibraryPillTitleAxis"
+        )
+        val titleStyle = rememberLibraryNavigationPillTitleStyle(widthAxis = animatedWidthAxis)
+
+        Row(
+            modifier = Modifier.height(pillHeight),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(pillGap)
         ) {
-            Box(
-                modifier = Modifier.padding(start = 18.dp, end = 14.dp),
-                contentAlignment = Alignment.CenterStart
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = pillRadius,
+                    bottomStart = pillRadius,
+                    topEnd = innerRadius,
+                    bottomEnd = innerRadius
+                ),
+                tonalElevation = 8.dp,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier
+                    .width(animatedTitleWidth)
+                    .height(pillHeight)
+                    .clip(
+                        RoundedCornerShape(
+                            topStart = pillRadius,
+                            bottomStart = pillRadius,
+                            topEnd = innerRadius,
+                            bottomEnd = innerRadius
+                        )
+                    )
+                    .clickable(onClick = onClick)
             ) {
-                AnimatedContent(
-                    targetState = PillState(pageIndex = pageIndex, iconRes = iconRes, title = title),
-                    transitionSpec = {
-                        val direction = targetState.pageIndex.compareTo(initialState.pageIndex).coerceIn(-1, 1)
-                        val slideIn = slideInHorizontally { fullWidth -> if (direction >= 0) fullWidth else -fullWidth } + fadeIn()
-                        val slideOut = slideOutHorizontally { fullWidth -> if (direction >= 0) -fullWidth else fullWidth } + fadeOut()
-                        slideIn.togetherWith(slideOut)
-                    },
-                    label = "LibraryPillTitle"
-                ) { targetState ->
-                    Row(
-                        modifier = Modifier.padding(vertical = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            painter = painterResource(id = targetState.iconRes),
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Text(
-                            text = targetState.title,
-                            style = MaterialTheme.typography.titleLarge.copy(fontSize = 26.sp),
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+                Box(
+                    modifier = Modifier.padding(horizontal = titleHorizontalPadding),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    AnimatedContent(
+                        targetState = PillState(pageIndex = pageIndex, iconRes = iconRes, title = title),
+                        transitionSpec = {
+                            val direction = targetState.pageIndex.compareTo(initialState.pageIndex).coerceIn(-1, 1)
+                            val slideIn = slideInHorizontally { fullWidth -> if (direction >= 0) fullWidth else -fullWidth } + fadeIn()
+                            val slideOut = slideOutHorizontally { fullWidth -> if (direction >= 0) -fullWidth else fullWidth } + fadeOut()
+                            slideIn.togetherWith(slideOut)
+                        },
+                        label = "LibraryPillTitle"
+                    ) { targetState ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = titleVerticalPadding)
+                                .animateContentSize(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            AnimatedVisibility(
+                                visible = showIcon,
+                                enter = expandHorizontally(
+                                    animationSpec = tween(durationMillis = 220),
+                                    expandFrom = Alignment.Start
+                                ) + fadeIn(animationSpec = tween(durationMillis = 180)),
+                                exit = shrinkHorizontally(
+                                    animationSpec = tween(durationMillis = 220),
+                                    shrinkTowards = Alignment.Start
+                                ) + fadeOut(animationSpec = tween(durationMillis = 160))
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        painter = painterResource(id = targetState.iconRes),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(titleIconSize),
+                                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Spacer(modifier = Modifier.width(titleIconSpacing))
+                                }
+                            }
+                            Text(
+                                modifier = Modifier.weight(1f, fill = false),
+                                text = targetState.title,
+                                style = titleStyle,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        // --- PARTE 2: FLECHA (Cambia de forma según estado) ---
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = animatedArrowCorner, // Anima entre 4.dp y 26.dp
-                bottomStart = animatedArrowCorner, // Anima entre 4.dp y 26.dp
-                topEnd = pillRadius,
-                bottomEnd = pillRadius
-            ),
-            tonalElevation = 8.dp,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier
-                .fillMaxHeight()
-                .clip(
-                    RoundedCornerShape(
-                        topStart = animatedArrowCorner, // Anima entre 4.dp y 26.dp
-                        bottomStart = animatedArrowCorner, // Anima entre 4.dp y 26.dp
-                        topEnd = pillRadius,
-                        bottomEnd = pillRadius
-                    )
-                )
-                .clickable(
-                    indication = ripple(),
-                    interactionSource = remember { MutableInteractionSource() },
-                    onClick = onArrowClick
-                )
-        ) {
-            Box(
+            Surface(
+                shape = RoundedCornerShape(
+                    topStart = animatedArrowCorner,
+                    bottomStart = animatedArrowCorner,
+                    topEnd = pillRadius,
+                    bottomEnd = pillRadius
+                ),
+                tonalElevation = 8.dp,
+                color = MaterialTheme.colorScheme.primaryContainer,
                 modifier = Modifier
-                    .padding(horizontal = 10.dp)
-                    .width(36.dp),
-                contentAlignment = Alignment.Center
+                    .height(pillHeight)
+                    .clip(
+                        RoundedCornerShape(
+                            topStart = animatedArrowCorner,
+                            bottomStart = animatedArrowCorner,
+                            topEnd = pillRadius,
+                            bottomEnd = pillRadius
+                        )
+                    )
+                    .clickable(
+                        indication = ripple(),
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = onArrowClick
+                    )
             ) {
-                Icon(
-                    modifier = Modifier.rotate(arrowRotation),
-                    imageVector = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = "Expandir menú",
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = animatedArrowHorizontalPadding)
+                        .width(arrowContentWidth),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        modifier = Modifier.rotate(arrowRotation),
+                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                        contentDescription = "Expandir menú",
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
             }
         }
+    }
+}
+
+private const val LibraryNavigationPillTitleWidthMin = 18f
+private const val LibraryNavigationPillTitleWidthMax = 100f
+private const val LibraryNavigationPillCompressedWidthAxis = 74f
+private val LibraryNavigationPillForcedCompressionWidth = 12.dp
+private val LibraryNavigationPillMinimumTextWidth = 56.dp
+private val LibraryNavigationPillArrowPaddingExpanded = 10.dp
+private val LibraryNavigationPillArrowPaddingCompressed = 4.dp
+
+@OptIn(ExperimentalTextApi::class)
+@Composable
+private fun rememberLibraryNavigationPillTitleStyle(widthAxis: Float): TextStyle {
+    return remember(widthAxis) {
+        TextStyle(
+            fontFamily = FontFamily(
+                Font(
+                    resId = R.font.gflex_variable,
+                    variationSettings = FontVariation.Settings(
+                        FontVariation.weight(400),
+                        FontVariation.width(widthAxis.coerceIn(
+                            LibraryNavigationPillTitleWidthMin,
+                            LibraryNavigationPillTitleWidthMax
+                        )),
+                        FontVariation.Setting("ROND", 100f),
+                        FontVariation.Setting("XTRA", 520f),
+                        FontVariation.Setting("YOPQ", 90f),
+                        FontVariation.Setting("YTLC", 505f)
+                    )
+                )
+            ),
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 26.sp,
+            lineHeight = 28.sp,
+            letterSpacing = (-0.2).sp
+        )
     }
 }
 
@@ -1580,7 +2294,11 @@ private fun LibraryTabSwitcherSheet(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(bottom = 24.dp, top = 8.dp)
             ) {
-                itemsIndexed(tabs, key = { index, tab -> "$tab-$index" }) { index, rawId ->
+                itemsIndexed(
+                    items = tabs,
+                    key = { index, tab -> "$tab-$index" },
+                    contentType = { _, _ -> "library_tab_item" }
+                ) { index, rawId ->
                     val tabId = rawId.toLibraryTabIdOrNull() ?: return@itemsIndexed
                     LibraryTabGridItem(
                         tabId = tabId,
@@ -1590,7 +2308,8 @@ private fun LibraryTabSwitcherSheet(
                 }
 
                 item(
-                    span = { GridItemSpan(maxLineSpan) }
+                    span = { GridItemSpan(maxLineSpan) },
+                    contentType = "reorder_tabs_action"
                 ) {
                     Box(
                         modifier = Modifier
@@ -1724,7 +2443,7 @@ private fun LibraryTabId.displayTitle(): String =
         if (char.isLowerCase()) char.titlecase(Locale.getDefault()) else char.toString()
     }
 
-@OptIn(ExperimentalAnimationApi::class)
+@OptIn(ExperimentalAnimationApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun LibraryFoldersTab(
     folders: ImmutableList<MusicFolder>,
@@ -1846,29 +2565,11 @@ fun LibraryFoldersTab(
                 }
 
                 itemsToShow.isEmpty() && songsToShow.isEmpty() -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(
-                                painter = painterResource(id = R.drawable.ic_folder),
-                                contentDescription = null,
-                                Modifier.size(48.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                            )
-                            Text(
-                                "No folders found.",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+                    LibraryExpressiveEmptyState(
+                        tabId = LibraryTabId.FOLDERS,
+                        storageFilter = StorageFilter.OFFLINE,
+                        bottomBarHeight = bottomBarHeight
+                    )
                 }
 
                 else -> {
@@ -2075,687 +2776,20 @@ private fun MusicFolder.collectAllSongs(): List<Song> {
     return songs + subFolders.flatMap { it.collectAllSongs() }
 }
 
-// NUEVA Pestaña para Favoritos
 @androidx.annotation.OptIn(UnstableApi::class)
-@Composable
-fun LibraryFavoritesTab(
-    favoriteSongs: androidx.paging.compose.LazyPagingItems<Song>,
-    playerViewModel: PlayerViewModel,
-    bottomBarHeight: Dp,
-    onMoreOptionsClick: (Song) -> Unit,
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit,
-    isSelectionMode: Boolean = false,
-    selectedSongIds: Set<String> = emptySet(),
-    onSongLongPress: (Song) -> Unit = {},
-    onSongSelectionToggle: (Song) -> Unit = {},
-    getSelectionIndex: (String) -> Int? = { null },
-    onLocateCurrentSongVisibilityChanged: (Boolean) -> Unit = {},
-    onRegisterLocateCurrentSongAction: ((() -> Unit)?) -> Unit = {}
-) {
-    val stablePlayerState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
-    val listState = rememberLazyListState()
-    val coroutineScope = rememberCoroutineScope()
-    val visibilityCallback by rememberUpdatedState(onLocateCurrentSongVisibilityChanged)
-    val registerActionCallback by rememberUpdatedState(onRegisterLocateCurrentSongAction)
-    val currentSongId = stablePlayerState.currentSong?.id
-
-    // For paging items, find current song index in loaded snapshot
-    val currentSongListIndex = remember(favoriteSongs.itemCount, currentSongId) {
-        if (currentSongId == null) -1
-        else {
-            val items = favoriteSongs.itemSnapshotList
-            items.indexOfFirst { it?.id == currentSongId }
-        }
-    }
-    val locateCurrentSongAction: (() -> Unit)? = remember(currentSongListIndex, listState) {
-        if (currentSongListIndex < 0) {
-            null
-        } else {
-            {
-                coroutineScope.launch {
-                    listState.animateScrollToItem(currentSongListIndex)
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(locateCurrentSongAction) {
-        registerActionCallback(locateCurrentSongAction)
-    }
-
-    LaunchedEffect(currentSongListIndex, favoriteSongs.itemCount, listState) {
-        if (currentSongListIndex < 0 || favoriteSongs.itemCount == 0) {
-            visibilityCallback(false)
-            return@LaunchedEffect
-        }
-
-        snapshotFlow {
-            val visibleItems = listState.layoutInfo.visibleItemsInfo
-            if (visibleItems.isEmpty()) {
-                false
-            } else {
-                currentSongListIndex in visibleItems.first().index..visibleItems.last().index
-            }
-        }
-            .distinctUntilChanged()
-            .collect { isVisible ->
-                visibilityCallback(!isVisible)
-            }
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            visibilityCallback(false)
-            registerActionCallback(null)
-        }
-    }
-
-    if (favoriteSongs.itemCount == 0 && favoriteSongs.loadState.refresh !is androidx.paging.LoadState.Loading) {
-        Box(modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp), contentAlignment = Alignment.Center) {
-            Column(
-                modifier = Modifier.align(Alignment.TopCenter),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Icon(Icons.Filled.FavoriteBorder, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(8.dp))
-                Text("No liked songs yet.", style = MaterialTheme.typography.titleMedium)
-                Text("Touch the heart icon in the player to add songs.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-            }
-        }
-    } else {
-        Box(modifier = Modifier
-            .fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            val songsPullToRefreshState = rememberPullToRefreshState()
-            PullToRefreshBox(
-                isRefreshing = isRefreshing,
-                onRefresh = onRefresh,
-                state = songsPullToRefreshState,
-                modifier = Modifier.fillMaxSize(),
-                indicator = {
-                    PullToRefreshDefaults.LoadingIndicator(
-                        state = songsPullToRefreshState,
-                        isRefreshing = isRefreshing,
-                        modifier = Modifier.align(Alignment.TopCenter)
-                    )
-                }
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    LazyColumn(
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(start = 12.dp, end = if (listState.canScrollForward || listState.canScrollBackward) 22.dp else 12.dp, bottom = 6.dp)
-                            .clip(
-                                RoundedCornerShape(
-                                    topStart = 26.dp,
-                                    topEnd = 26.dp,
-                                    bottomStart = PlayerSheetCollapsedCornerRadius,
-                                    bottomEnd = PlayerSheetCollapsedCornerRadius
-                                )
-                            ),
-                        state = listState,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + 30.dp)
-                    ) {
-                        items(
-                            count = favoriteSongs.itemCount,
-                            key = { index -> favoriteSongs.peek(index)?.id ?: index },
-                            contentType = { "song" }
-                        ) { index ->
-                            val song = favoriteSongs[index]
-                            if (song != null) {
-                                val isPlayingThisSong =
-                                    song.id == stablePlayerState.currentSong?.id && stablePlayerState.isPlaying
-                                EnhancedSongListItem(
-                                    song = song,
-                                    isCurrentSong = stablePlayerState.currentSong?.id == song.id,
-                                    isPlaying = isPlayingThisSong,
-                                    onMoreOptionsClick = { onMoreOptionsClick(song) },
-                                    isSelected = selectedSongIds.contains(song.id),
-                                    selectionIndex = if (isSelectionMode) getSelectionIndex(song.id) else null,
-                                    isSelectionMode = isSelectionMode,
-                                    onLongPress = { onSongLongPress(song) },
-                                    onClick = {
-                                        if (isSelectionMode) {
-                                            onSongSelectionToggle(song)
-                                        } else {
-                                            playerViewModel.showAndPlaySong(
-                                                song,
-                                                favoriteSongs.itemSnapshotList.items,
-                                                "Liked Songs"
-                                            )
-                                        }
-                                    }
-                                )
-                            } else {
-                                // Placeholder while loading
-                                EnhancedSongListItem(
-                                    song = Song.emptySong(),
-                                    isPlaying = false,
-                                    isLoading = true,
-                                    isCurrentSong = false,
-                                    onMoreOptionsClick = {},
-                                    onClick = {}
-                                )
-                            }
-                        }
-                    }
-
-                    // ScrollBar Overlay
-                    val bottomPadding = if (stablePlayerState.currentSong != null && stablePlayerState.currentSong != Song.emptySong())
-                        bottomBarHeight + MiniPlayerHeight + 16.dp
-                    else
-                        bottomBarHeight + 16.dp
-
-                    ExpressiveScrollBar(
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = 4.dp, top = 16.dp, bottom = bottomPadding),
-                        listState = listState
-                    )
-                }
-            }
-        }
-    }
-}
-
-
-/**
- * Paginated version of LibrarySongsTab using Paging 3 for efficient memory usage.
- * Displays songs in pages, loading only what's needed for the current viewport.
- */
-@androidx.annotation.OptIn(UnstableApi::class)
-@Composable
-fun LibrarySongsTabPaginated(
-    paginatedSongs: androidx.paging.compose.LazyPagingItems<Song>,
-    stablePlayerState: StablePlayerState,
-    playerViewModel: PlayerViewModel,
-    bottomBarHeight: Dp,
-    onMoreOptionsClick: (Song) -> Unit,
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit
-) {
-    val listState = rememberLazyListState()
-    val pullToRefreshState = rememberPullToRefreshState()
-
-    // Handle different loading states
-    when {
-        paginatedSongs.loadState.refresh is LoadState.Loading && paginatedSongs.itemCount == 0 -> {
-            // Initial loading - show skeleton placeholders
-            LazyColumn(
-                modifier = Modifier
-                    .padding(start = 12.dp, end = if (listState.canScrollForward || listState.canScrollBackward) 22.dp else 12.dp, bottom = 6.dp)
-                    .clip(
-                        RoundedCornerShape(
-                            topStart = 26.dp,
-                            topEnd = 26.dp,
-                            bottomStart = PlayerSheetCollapsedCornerRadius,
-                            bottomEnd = PlayerSheetCollapsedCornerRadius
-                        )
-                    )
-                    .fillMaxSize(),
-                state = listState,
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + ListExtraBottomGap)
-            ) {
-                items(12, key = { "skeleton_song_$it" }) { // Show 12 skeleton items to fill the screen
-                    EnhancedSongListItem(
-                        song = Song.emptySong(),
-                        isPlaying = false,
-                        isLoading = true,
-                        isCurrentSong = false,
-                        onMoreOptionsClick = {},
-                        onClick = {}
-                    )
-                }
-            }
-        }
-        paginatedSongs.loadState.refresh is LoadState.Error && paginatedSongs.itemCount == 0 -> {
-            // Error state
-            val error = (paginatedSongs.loadState.refresh as LoadState.Error).error
-            Box(
-                modifier = Modifier.fillMaxSize().padding(16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Error loading songs", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        error.localizedMessage ?: "Unknown error",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Button(onClick = { paginatedSongs.retry() }) {
-                        Text("Retry")
-                    }
-                }
-            }
-        }
-        paginatedSongs.itemCount == 0 && paginatedSongs.loadState.refresh is LoadState.NotLoading -> {
-            // Empty state
-            Box(
-                modifier = Modifier.fillMaxSize().padding(16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.rounded_music_off_24),
-                        contentDescription = "No songs found",
-                        modifier = Modifier.size(48.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text("No songs found in your library.", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Try rescanning your library in settings if you have music on your device.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-        }
-        else -> {
-            // Songs loaded - show paginated list
-            Box(modifier = Modifier.fillMaxSize()) {
-                PullToRefreshBox(
-                    isRefreshing = isRefreshing,
-                    onRefresh = {
-                        onRefresh()
-                        paginatedSongs.refresh()
-                    },
-                    state = pullToRefreshState,
-                    modifier = Modifier.fillMaxSize(),
-                    indicator = {
-                        PullToRefreshDefaults.LoadingIndicator(
-                            state = pullToRefreshState,
-                            isRefreshing = isRefreshing,
-                            modifier = Modifier.align(Alignment.TopCenter)
-                        )
-                    }
-                ) {
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        LazyColumn(
-                            modifier = Modifier
-                                .padding(start = 12.dp, end = if (listState.canScrollForward || listState.canScrollBackward) 22.dp else 12.dp, bottom = 6.dp)
-                                .clip(
-                                    RoundedCornerShape(
-                                        topStart = 26.dp,
-                                        topEnd = 26.dp,
-                                        bottomStart = PlayerSheetCollapsedCornerRadius,
-                                        bottomEnd = PlayerSheetCollapsedCornerRadius
-                                    )
-                                ),
-                            state = listState,
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + 30.dp)
-                        ) {
-                            item(key = "songs_top_spacer") { Spacer(Modifier.height(0.dp)) }
-
-                            items(
-                                count = paginatedSongs.itemCount,
-                                key = { index -> paginatedSongs.peek(index)?.id ?: "paged_song_$index" },
-                                contentType = paginatedSongs.itemContentType { "song" }
-                            ) { index ->
-                                val song = paginatedSongs[index]
-                                if (song != null) {
-                                    val isPlayingThisSong = song.id == stablePlayerState.currentSong?.id && stablePlayerState.isPlaying
-
-                                    val rememberedOnMoreOptionsClick: (Song) -> Unit = remember(onMoreOptionsClick) {
-                                        { songFromListItem -> onMoreOptionsClick(songFromListItem) }
-                                    }
-                                    val rememberedOnClick: () -> Unit = remember(song) {
-                                        { playerViewModel.showAndPlaySong(song) }
-                                    }
-
-                                    EnhancedSongListItem(
-                                        song = song,
-                                        isPlaying = isPlayingThisSong,
-                                        isCurrentSong = stablePlayerState.currentSong?.id == song.id,
-                                        isLoading = false,
-                                        onMoreOptionsClick = rememberedOnMoreOptionsClick,
-                                        onClick = rememberedOnClick
-                                    )
-                                } else {
-                                    // Placeholder while loading
-                                    EnhancedSongListItem(
-                                        song = Song.emptySong(),
-                                        isPlaying = false,
-                                        isLoading = true,
-                                        isCurrentSong = false,
-                                        onMoreOptionsClick = {},
-                                        onClick = {}
-                                    )
-                                }
-                            }
-
-                            // Loading indicator for appending more items
-                            if (paginatedSongs.loadState.append is LoadState.Loading) {
-                                item {
-                                    Box(
-                                        Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        LoadingIndicator(modifier = Modifier.size(32.dp))
-                                    }
-                                }
-                            }
-                        }
-
-                        // ScrollBar Overlay
-                        val bottomPadding = if (stablePlayerState.currentSong != null && stablePlayerState.currentSong != Song.emptySong())
-                            bottomBarHeight + MiniPlayerHeight + 16.dp
-                        else
-                            bottomBarHeight + 16.dp
-
-                        ExpressiveScrollBar(
-                            modifier = Modifier
-                                .align(Alignment.CenterEnd)
-                                .padding(end = 4.dp, top = 16.dp, bottom = bottomPadding),
-                            listState = listState
-                        )
-                    }
-                }
-                // Top gradient fade effect
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(10.dp)
-                        .background(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.surface, Color.Transparent
-                                )
-                            )
-                        )
-                )
-            }
-        }
-    }
-}
-
-@androidx.annotation.OptIn(UnstableApi::class)
-@Composable
-fun LibraryAlbumsTab(
-    albums: ImmutableList<Album>,
-    isLoading: Boolean,
-    playerViewModel: PlayerViewModel,
-    bottomBarHeight: Dp,
-    onAlbumClick: (Long) -> Unit,
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit
-) {
-    val gridState = rememberLazyGridState()
-    val listState = rememberLazyListState() // New state for list view
-    val context = LocalContext.current
-    val imageLoader = context.imageLoader
-
-    // Collect view mode preference
-    val playerUiState by playerViewModel.playerUiState.collectAsState()
-    val isListView = playerUiState.isAlbumsListView
-
-    // Scroll to top when sort option changes
-    LaunchedEffect(playerUiState.currentAlbumSortOption) {
-        if (isListView) {
-            listState.scrollToItem(0)
-        } else {
-            gridState.scrollToItem(0)
-        }
-    }
-
-    // Prefetching logic for LibraryAlbumsTab
-    LaunchedEffect(albums, gridState, listState, isListView) {
-        if (isListView) {
-            // Prefetch logic for List View
-            snapshotFlow { listState.layoutInfo }
-                .distinctUntilChanged()
-                .collect { layoutInfo ->
-                    val visibleItemsInfo = layoutInfo.visibleItemsInfo
-                    if (visibleItemsInfo.isNotEmpty() && albums.isNotEmpty()) {
-                        val lastVisibleItemIndex = visibleItemsInfo.last().index
-                        val totalItemsCount = albums.size
-                        val prefetchThreshold = 5
-                        val prefetchCount = 10
-
-                        if (totalItemsCount > lastVisibleItemIndex + 1 && lastVisibleItemIndex + prefetchThreshold >= totalItemsCount - prefetchCount) {
-                            val startIndexToPrefetch = lastVisibleItemIndex + 1
-                            val endIndexToPrefetch = (startIndexToPrefetch + prefetchCount).coerceAtMost(totalItemsCount)
-
-                            (startIndexToPrefetch until endIndexToPrefetch).forEach { indexToPrefetch ->
-                                val album = albums.getOrNull(indexToPrefetch)
-                                album?.albumArtUriString?.let { uri ->
-                                    val request = ImageRequest.Builder(context)
-                                        .data(uri)
-                                        .size(Size(256, 256))
-                                        .build()
-                                    imageLoader.enqueue(request)
-                                }
-                            }
-                        }
-                    }
-                }
-        } else {
-            // Prefetch logic for Grid View
-            snapshotFlow { gridState.layoutInfo }
-                .distinctUntilChanged()
-                .collect { layoutInfo ->
-                    val visibleItemsInfo = layoutInfo.visibleItemsInfo
-                    if (visibleItemsInfo.isNotEmpty() && albums.isNotEmpty()) {
-                        val lastVisibleItemIndex = visibleItemsInfo.last().index
-                        val totalItemsCount = albums.size
-                        val prefetchThreshold = 5
-                        val prefetchCount = 10
-
-                        if (totalItemsCount > lastVisibleItemIndex + 1 && lastVisibleItemIndex + prefetchThreshold >= totalItemsCount - prefetchCount) {
-                            val startIndexToPrefetch = lastVisibleItemIndex + 1
-                            val endIndexToPrefetch = (startIndexToPrefetch + prefetchCount).coerceAtMost(totalItemsCount)
-
-                            (startIndexToPrefetch until endIndexToPrefetch).forEach { indexToPrefetch ->
-                                val album = albums.getOrNull(indexToPrefetch)
-                                album?.albumArtUriString?.let { uri ->
-                                    val request = ImageRequest.Builder(context)
-                                        .data(uri)
-                                        .size(Size(256, 256))
-                                        .build()
-                                    imageLoader.enqueue(request)
-                                }
-                            }
-                        }
-                    }
-                }
-        }
-    }
-
-    if (isLoading && albums.isEmpty()) {
-        // Show skeleton grid during loading
-        if (isListView) {
-            LazyColumn(
-                modifier = Modifier
-                    .padding(start = 14.dp, end = 14.dp, bottom = 6.dp)
-                    .clip(
-                        RoundedCornerShape(
-                            topStart = 26.dp,
-                            topEnd = 26.dp,
-                            bottomStart = PlayerSheetCollapsedCornerRadius,
-                            bottomEnd = PlayerSheetCollapsedCornerRadius
-                        )
-                    )
-                    .fillMaxSize(),
-                state = listState,
-                contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + ListExtraBottomGap + 4.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(8, key = { "skeleton_album_list_$it" }) {
-                    AlbumListItem(
-                        album = Album.empty(),
-                        albumColorSchemePairFlow = MutableStateFlow(null),
-                        onClick = {},
-                        isLoading = true
-                    )
-                }
-            }
-        } else {
-            LazyVerticalGrid(
-                modifier = Modifier
-                    .padding(start = 14.dp, end = 14.dp, bottom = 6.dp)
-                    .clip(
-                        RoundedCornerShape(
-                            topStart = 26.dp,
-                            topEnd = 26.dp,
-                            bottomStart = PlayerSheetCollapsedCornerRadius,
-                            bottomEnd = PlayerSheetCollapsedCornerRadius
-                        )
-                    )
-                    .fillMaxSize(),
-                state = gridState,
-                columns = GridCells.Fixed(2),
-                contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + ListExtraBottomGap + 4.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                items(8, key = { "skeleton_album_grid_$it" }) { // Show 8 skeleton items (4 rows x 2 columns)
-                    AlbumGridItemRedesigned(
-                        album = Album.empty(),
-                        albumColorSchemePairFlow = MutableStateFlow(null),
-                        onClick = {},
-                        isLoading = true
-                    )
-                }
-            }
-        }
-    } else if (albums.isEmpty() && !isLoading) { // canLoadMore removed
-        Box(modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Icon(Icons.Filled.Album, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f))
-                Text("No albums found.", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    } else {
-        // Songs loaded
-        Box(modifier = Modifier.fillMaxSize()) {
-            val albumsPullToRefreshState = rememberPullToRefreshState()
-            PullToRefreshBox(
-                isRefreshing = isRefreshing,
-                onRefresh = onRefresh,
-                state = albumsPullToRefreshState,
-                modifier = Modifier.fillMaxSize(),
-                indicator = {
-                    PullToRefreshDefaults.LoadingIndicator(
-                        state = albumsPullToRefreshState,
-                        isRefreshing = isRefreshing,
-                        modifier = Modifier.align(Alignment.TopCenter)
-                    )
-                }
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    if (isListView) {
-
-                        LazyColumn(
-                            modifier = Modifier
-                                .padding(start = 14.dp, end = if (listState.canScrollForward || listState.canScrollBackward) 24.dp else 14.dp, bottom = 6.dp)
-                                .clip(
-                                    RoundedCornerShape(
-                                        topStart = 26.dp,
-                                        topEnd = 26.dp,
-                                        bottomStart = PlayerSheetCollapsedCornerRadius,
-                                        bottomEnd = PlayerSheetCollapsedCornerRadius
-                                    )
-                                ),
-                            state = listState,
-                            contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + ListExtraBottomGap + 4.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(albums, key = { it.id }) { album ->
-                                val albumSpecificColorSchemeFlow =
-                                    playerViewModel.themeStateHolder.getAlbumColorSchemeFlow(album.albumArtUriString ?: "")
-                                val rememberedOnClick = remember(album.id) { { onAlbumClick(album.id) } }
-                                AlbumListItem(
-                                    album = album,
-                                    albumColorSchemePairFlow = albumSpecificColorSchemeFlow,
-                                    onClick = rememberedOnClick,
-                                    isLoading = isLoading && albums.isEmpty()
-                                )
-                            }
-                        }
-                        // ScrollBar Overlay for List
-                        val stablePlayerState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
-                        val bottomPadding = if (stablePlayerState.currentSong != null && stablePlayerState.currentSong != Song.emptySong())
-                            bottomBarHeight + MiniPlayerHeight + 16.dp
-                        else
-                            bottomBarHeight + 16.dp
-
-                        ExpressiveScrollBar(
-                            modifier = Modifier
-                                .align(Alignment.CenterEnd)
-                                .padding(end = 4.dp, top = 16.dp, bottom = bottomPadding),
-                            listState = listState
-                        )
-                    } else {
-                        LazyVerticalGrid(
-                            modifier = Modifier
-                                .padding(start = 14.dp, end = if (gridState.canScrollForward || gridState.canScrollBackward) 24.dp else 14.dp, bottom = 6.dp)
-                                .clip(
-                                    RoundedCornerShape(
-                                        topStart = 26.dp,
-                                        topEnd = 26.dp,
-                                        bottomStart = PlayerSheetCollapsedCornerRadius,
-                                        bottomEnd = PlayerSheetCollapsedCornerRadius
-                                    )
-                                ),
-                            state = gridState,
-                            columns = GridCells.Fixed(2),
-                            contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + ListExtraBottomGap + 4.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-
-                            items(albums, key = { it.id }) { album ->
-                                val albumSpecificColorSchemeFlow =
-                                    playerViewModel.themeStateHolder.getAlbumColorSchemeFlow(album.albumArtUriString ?: "")
-                                val rememberedOnClick = remember(album.id) { { onAlbumClick(album.id) } }
-                                AlbumGridItemRedesigned(
-                                    album = album,
-                                    albumColorSchemePairFlow = albumSpecificColorSchemeFlow,
-                                    onClick = rememberedOnClick,
-                                    isLoading = isLoading && albums.isEmpty() // Shimmer solo si está cargando Y la lista está vacía
-                                )
-                            }
-                        }
-
-                        // ScrollBar Overlay for Grid
-                        val stablePlayerState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
-                        val bottomPadding = if (stablePlayerState.currentSong != null && stablePlayerState.currentSong != Song.emptySong())
-                            bottomBarHeight + MiniPlayerHeight + 16.dp
-                        else
-                            bottomBarHeight + 16.dp
-
-                        ExpressiveScrollBar(
-                            modifier = Modifier
-                                .align(Alignment.CenterEnd)
-                                .padding(end = 4.dp, top = 16.dp, bottom = bottomPadding),
-                            gridState = gridState
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
 @Composable
 fun AlbumGridItemRedesigned(
     album: Album,
     albumColorSchemePairFlow: StateFlow<ColorSchemePair?>,
     onClick: () -> Unit,
-    isLoading: Boolean = false
+    isLoading: Boolean = false,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    selectionIndex: Int? = null,
+    onLongPress: () -> Unit = {},
+    onSelectionToggle: () -> Unit = {}
 ) {
-    val albumColorSchemePair by albumColorSchemePairFlow.collectAsState()
+    val albumColorSchemePair by albumColorSchemePairFlow.collectAsStateWithLifecycle()
     val systemIsDark = LocalPixelPlayDarkTheme.current
 
     // 1. Obtén el colorScheme del tema actual aquí, en el scope Composable.
@@ -2771,6 +2805,16 @@ fun AlbumGridItemRedesigned(
     val gradientBaseColor = itemDesignColorScheme.primaryContainer
     val onGradientColor = itemDesignColorScheme.onPrimaryContainer
     val cardCornerRadius = 20.dp
+    val selectionScale by animateFloatAsState(
+        targetValue = if (isSelected) 0.985f else 1f,
+        animationSpec = tween(durationMillis = 220),
+        label = "albumGridSelectionScale"
+    )
+    val selectionBorderWidth by animateDpAsState(
+        targetValue = if (isSelected) 2.dp else 0.dp,
+        animationSpec = tween(durationMillis = 220),
+        label = "albumGridSelectionBorder"
+    )
 
     if (isLoading) {
         Card(
@@ -2819,70 +2863,115 @@ fun AlbumGridItemRedesigned(
         }
     } else {
         Card(
-            onClick = onClick,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .scale(selectionScale)
+                .then(
+                    if (isSelected) {
+                        Modifier.border(
+                            width = selectionBorderWidth,
+                            color = MaterialTheme.colorScheme.primary,
+                            shape = RoundedCornerShape(cardCornerRadius)
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
+                .combinedClickable(
+                    onClick = {
+                        if (isSelectionMode) {
+                            onSelectionToggle()
+                        } else {
+                            onClick()
+                        }
+                    },
+                    onLongClick = onLongPress
+                ),
             shape = RoundedCornerShape(cardCornerRadius),
             //elevation = CardDefaults.cardElevation(defaultElevation = 4.dp, pressedElevation = 8.dp),
             colors = CardDefaults.cardColors(containerColor = itemDesignColorScheme.surfaceVariant.copy(alpha = 0.3f))
         ) {
-            Column(
-                modifier = Modifier.background(
-                    color = gradientBaseColor,
-                    shape = RoundedCornerShape(cardCornerRadius)
-                )
-            ) {
-                Box(contentAlignment = Alignment.BottomStart) {
-                    var isLoadingImage by remember { mutableStateOf(true) }
-                    SmartImage(
-                        model = album.albumArtUriString,
-                        contentDescription = "Carátula de ${album.title}",
-                        contentScale = ContentScale.Crop,
-                        // Reducido el tamaño para mejorar el rendimiento del scroll, como se sugiere en el informe.
-                        // ContentScale.Crop se encargará de ajustar la imagen al aspect ratio.
-                        targetSize = Size(256, 256),
-                        modifier = Modifier
-                            .aspectRatio(3f / 2f)
-                            .fillMaxSize(),
-                        onState = { state ->
-                            isLoadingImage = state is AsyncImagePainter.State.Loading
-                        }
+            Box {
+                Column(
+                    modifier = Modifier.background(
+                        color = gradientBaseColor,
+                        shape = RoundedCornerShape(cardCornerRadius)
                     )
-                    if (isLoadingImage) {
-                        ShimmerBox(
+                ) {
+                    Box(contentAlignment = Alignment.BottomStart) {
+                        var isLoadingImage by remember { mutableStateOf(true) }
+                        SmartImage(
+                            model = album.albumArtUriString,
+                            contentDescription = "Carátula de ${album.title}",
+                            contentScale = ContentScale.Crop,
+                            // Reducido el tamaño para mejorar el rendimiento del scroll, como se sugiere en el informe.
+                            // ContentScale.Crop se encargará de ajustar la imagen al aspect ratio.
+                            targetSize = Size(256, 256),
                             modifier = Modifier
                                 .aspectRatio(3f / 2f)
+                                .fillMaxSize(),
+                            onState = { state ->
+                                isLoadingImage = state is AsyncImagePainter.State.Loading
+                            }
+                        )
+                        if (isLoadingImage) {
+                            ShimmerBox(
+                                modifier = Modifier
+                                    .aspectRatio(3f / 2f)
+                                    .fillMaxSize()
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
                                 .fillMaxSize()
+                                .aspectRatio(3f / 2f)
+                                .background(
+                                    remember(gradientBaseColor) { // Recordar el Brush
+                                        Brush.verticalGradient(
+                                            colors = listOf(
+                                                Color.Transparent, gradientBaseColor
+                                            )
+                                        )
+                                    })
                         )
                     }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp)
+                    ) {
+                        Text(
+                            album.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = onGradientColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(album.artist, style = MaterialTheme.typography.bodySmall, color = onGradientColor.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("${album.songCount} Songs", style = MaterialTheme.typography.bodySmall, color = onGradientColor.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+
+                if (isSelectionMode && isSelected) {
                     Box(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .aspectRatio(3f / 2f)
+                            .align(Alignment.TopEnd)
+                            .padding(10.dp)
+                            .size(28.dp)
                             .background(
-                                remember(gradientBaseColor) { // Recordar el Brush
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.Transparent, gradientBaseColor
-                                        )
-                                    )
-                                })
-                    )
-                }
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp)
-                ) {
-                    Text(
-                        album.title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = onGradientColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(album.artist, style = MaterialTheme.typography.bodySmall, color = onGradientColor.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text("${album.songCount} Songs", style = MaterialTheme.typography.bodySmall, color = onGradientColor.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = selectionIndex?.toString() ?: "✓",
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }
@@ -2890,122 +2979,6 @@ fun AlbumGridItemRedesigned(
 }
 
 @androidx.annotation.OptIn(UnstableApi::class)
-@Composable
-fun LibraryArtistsTab(
-    artists: ImmutableList<Artist>,
-    isLoading: Boolean, // This now represents the loading state for all artists
-    // canLoadMore: Boolean, // Removed
-    playerViewModel: PlayerViewModel,
-    bottomBarHeight: Dp,
-    onArtistClick: (Long) -> Unit,
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit
-) {
-    val listState = rememberLazyListState()
-    val playerUiState by playerViewModel.playerUiState.collectAsState()
-
-    // Scroll to top when sort option changes
-    LaunchedEffect(playerUiState.currentArtistSortOption) {
-        listState.scrollToItem(0)
-    }
-
-    if (isLoading && artists.isEmpty()) {
-        // Show skeleton list during loading
-        LazyColumn(
-            modifier = Modifier
-                .padding(start = 12.dp, end = 12.dp, bottom = 6.dp)
-                .clip(
-                    RoundedCornerShape(
-                        topStart = 26.dp,
-                        topEnd = 26.dp,
-                        bottomStart = PlayerSheetCollapsedCornerRadius,
-                        bottomEnd = PlayerSheetCollapsedCornerRadius
-                    )
-                )
-                .fillMaxSize(),
-            state = listState,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + ListExtraBottomGap)
-        ) {
-            item(key = "skeleton_top_spacer") { Spacer(Modifier.height(4.dp)) }
-            items(10, key = { "skeleton_artist_$it" }) { // Show 10 skeleton items
-                ArtistListItem(
-                    artist = Artist.empty(),
-                    onClick = {},
-                    isLoading = true
-                )
-            }
-        }
-    }
-    else if (artists.isEmpty() && !isLoading) { /* ... No artists ... */ } // canLoadMore removed
-    else {
-        Box(
-            modifier = Modifier.fillMaxSize()
-        ) {
-            val genresPullToRefreshState = rememberPullToRefreshState()
-            PullToRefreshBox(
-                isRefreshing = isRefreshing,
-                onRefresh = onRefresh,
-                state = genresPullToRefreshState,
-                modifier = Modifier.fillMaxSize(),
-                indicator = {
-                    PullToRefreshDefaults.LoadingIndicator(
-                        state = genresPullToRefreshState,
-                        isRefreshing = isRefreshing,
-                        modifier = Modifier.align(Alignment.TopCenter)
-                    )
-                }
-            ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    LazyColumn(
-                        modifier = Modifier
-                            .padding(start = 12.dp, end = if (listState.canScrollForward || listState.canScrollBackward) 22.dp else 12.dp, bottom = 6.dp)
-                            .clip(
-                                RoundedCornerShape(
-                                    topStart = 26.dp,
-                                    topEnd = 26.dp,
-                                    bottomStart = PlayerSheetCollapsedCornerRadius,
-                                    bottomEnd = PlayerSheetCollapsedCornerRadius
-                                )
-                            ),
-                        state = listState,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        contentPadding = PaddingValues(bottom = bottomBarHeight + MiniPlayerHeight + ListExtraBottomGap)
-                    ) {
-//                        item(key = "artists_top_spacer") {
-//                            Spacer(Modifier.height(4.dp))
-//                        }
-                        items(artists, key = { it.id }) { artist ->
-                            val rememberedOnClick = remember(artist) { { onArtistClick(artist.id) } }
-                            ArtistListItem(artist = artist, onClick = rememberedOnClick)
-                        }
-                        // "Load more" indicator removed as all artists are loaded at once
-                        // if (isLoading && artists.isNotEmpty()) {
-                        //     item { Box(Modifier
-                        //         .fillMaxWidth()
-                        //         .padding(16.dp), Alignment.Center) { CircularProgressIndicator() } }
-                        // }
-                    }
-
-                    // ScrollBar Overlay
-                    val stablePlayerState by playerViewModel.stablePlayerStateInfrequent.collectAsState()
-                    val bottomPadding = if (stablePlayerState.currentSong != null && stablePlayerState.currentSong != Song.emptySong())
-                        bottomBarHeight + MiniPlayerHeight + 16.dp
-                    else
-                        bottomBarHeight + 16.dp
-
-                    ExpressiveScrollBar(
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .padding(end = 4.dp, top = 16.dp, bottom = bottomPadding),
-                        listState = listState
-                    )
-                }
-            }
-        }
-    }
-}
-
 @Composable
 fun ArtistListItem(artist: Artist, onClick: () -> Unit, isLoading: Boolean = false) {
     Card(
@@ -3078,32 +3051,18 @@ fun ArtistListItem(artist: Artist, onClick: () -> Unit, isLoading: Boolean = fal
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-fun LibraryPlaylistsTab(
-    playlistUiState: PlaylistUiState,
-    navController: NavController,
-    playerViewModel: PlayerViewModel,
-    bottomBarHeight: Dp,
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit
-) {
-    PlaylistContainer(
-        playlistUiState = playlistUiState,
-        isRefreshing = isRefreshing,
-        onRefresh = onRefresh,
-        bottomBarHeight = bottomBarHeight,
-        navController = navController,
-        playerViewModel = playerViewModel,
-    )
-}
-
-@Composable
 fun AlbumListItem(
     album: Album,
     albumColorSchemePairFlow: StateFlow<ColorSchemePair?>,
     onClick: () -> Unit,
-    isLoading: Boolean = false
+    isLoading: Boolean = false,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    selectionIndex: Int? = null,
+    onLongPress: () -> Unit = {},
+    onSelectionToggle: () -> Unit = {}
 ) {
-    val albumColorSchemePair by albumColorSchemePairFlow.collectAsState()
+    val albumColorSchemePair by albumColorSchemePairFlow.collectAsStateWithLifecycle()
     val systemIsDark = LocalPixelPlayDarkTheme.current
     val currentMaterialColorScheme = MaterialTheme.colorScheme
 
@@ -3116,6 +3075,16 @@ fun AlbumListItem(
     val gradientBaseColor = itemDesignColorScheme.primaryContainer
     val onGradientColor = itemDesignColorScheme.onPrimaryContainer
     val cardCornerRadius = 16.dp
+    val selectionScale by animateFloatAsState(
+        targetValue = if (isSelected) 0.99f else 1f,
+        animationSpec = tween(durationMillis = 200),
+        label = "albumListSelectionScale"
+    )
+    val selectionBorderWidth by animateDpAsState(
+        targetValue = if (isSelected) 2.dp else 0.dp,
+        animationSpec = tween(durationMillis = 200),
+        label = "albumListSelectionBorder"
+    )
 
     if (isLoading) {
         Card(
@@ -3155,93 +3124,137 @@ fun AlbumListItem(
         }
     } else {
         Card(
-            onClick = onClick,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(88.dp),
+                .height(88.dp)
+                .scale(selectionScale)
+                .then(
+                    if (isSelected) {
+                        Modifier.border(
+                            width = selectionBorderWidth,
+                            color = MaterialTheme.colorScheme.primary,
+                            shape = RoundedCornerShape(cardCornerRadius)
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
+                .combinedClickable(
+                    onClick = {
+                        if (isSelectionMode) {
+                            onSelectionToggle()
+                        } else {
+                            onClick()
+                        }
+                    },
+                    onLongClick = onLongPress
+                ),
             shape = RoundedCornerShape(cardCornerRadius),
             colors = CardDefaults.cardColors(containerColor = itemDesignColorScheme.surfaceVariant.copy(alpha = 0.3f))
         ) {
-            Row(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                // LEFT: Album Art
-                Box(
-                    modifier = Modifier
-                        .aspectRatio(1f)
-                        .fillMaxHeight()
+            Box(modifier = Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier.fillMaxSize()
                 ) {
-                    var isLoadingImage by remember { mutableStateOf(true) }
-                    SmartImage(
-                        model = album.albumArtUriString,
-                        contentDescription = "Carátula de ${album.title}",
-                        contentScale = ContentScale.Crop,
-                        targetSize = Size(256, 256),
-                        modifier = Modifier.fillMaxSize(),
-                        onState = { state ->
-                            isLoadingImage = state is AsyncImagePainter.State.Loading
-                        }
-                    )
-                    if (isLoadingImage) {
-                        ShimmerBox(modifier = Modifier.fillMaxSize())
-                    }
-
-                    // Gradient Overlay
+                    // LEFT: Album Art
                     Box(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                Brush.horizontalGradient(
-                                    colors = listOf(
-                                        Color.Transparent,
-                                        gradientBaseColor
-                                    )
-                                )
-                            )
-                    )
-                }
-
-                // MIDDLE: Solid Background
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .background(gradientBaseColor)
-                ) {
-                    // Text on top of the gradient/solid background
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.Center
+                            .aspectRatio(1f)
+                            .fillMaxHeight()
                     ) {
-                        val variableTextStyle = remember(album.id, album.title) {
-                            GenreTypography.getGenreStyle(album.id.toString(), album.title)
+                        var isLoadingImage by remember { mutableStateOf(true) }
+                        SmartImage(
+                            model = album.albumArtUriString,
+                            contentDescription = "Carátula de ${album.title}",
+                            contentScale = ContentScale.Crop,
+                            targetSize = Size(256, 256),
+                            modifier = Modifier.fillMaxSize(),
+                            onState = { state ->
+                                isLoadingImage = state is AsyncImagePainter.State.Loading
+                            }
+                        )
+                        if (isLoadingImage) {
+                            ShimmerBox(modifier = Modifier.fillMaxSize())
                         }
 
-                        Text(
-                            album.title,
-                            style = variableTextStyle.copy(fontSize = 22.sp),
-                            color = onGradientColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                        // Gradient Overlay
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.horizontalGradient(
+                                        colors = listOf(
+                                            Color.Transparent,
+                                            gradientBaseColor
+                                        )
+                                    )
+                                )
                         )
-                        Spacer(
-                            modifier = Modifier.height(4.dp)
-                        )
+                    }
+
+                    // MIDDLE: Solid Background
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .background(gradientBaseColor)
+                    ) {
+                        // Text on top of the gradient/solid background
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            val variableTextStyle = remember(album.id, album.title) {
+                                GenreTypography.getGenreStyle(album.id.toString(), album.title)
+                            }
+
+                            Text(
+                                album.title,
+                                style = variableTextStyle.copy(fontSize = 22.sp),
+                                color = onGradientColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(
+                                modifier = Modifier.height(4.dp)
+                            )
+                            Text(
+                                album.artist,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = onGradientColor.copy(alpha = 0.85f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                "${album.songCount} Songs",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = onGradientColor.copy(alpha = 0.7f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
+                if (isSelectionMode && isSelected) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .size(24.dp)
+                            .background(
+                                color = MaterialTheme.colorScheme.primary,
+                                shape = CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
                         Text(
-                            album.artist,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = onGradientColor.copy(alpha = 0.85f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            "${album.songCount} Songs",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = onGradientColor.copy(alpha = 0.7f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            text = selectionIndex?.toString() ?: "✓",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }

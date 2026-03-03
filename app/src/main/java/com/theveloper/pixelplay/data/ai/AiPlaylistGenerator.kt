@@ -1,19 +1,25 @@
 package com.theveloper.pixelplay.data.ai
 
-import com.google.ai.client.generativeai.GenerativeModel
 import com.theveloper.pixelplay.data.DailyMixManager
 import com.theveloper.pixelplay.data.model.Song
-import com.theveloper.pixelplay.data.preferences.UserPreferencesRepository
+import com.theveloper.pixelplay.data.preferences.AiPreferencesRepository
+import com.theveloper.pixelplay.data.ai.provider.AiClientFactory
+import com.theveloper.pixelplay.data.ai.provider.AiProvider
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import kotlin.math.max
 
 class AiPlaylistGenerator @Inject constructor(
-    private val userPreferencesRepository: UserPreferencesRepository,
+    private val aiPreferencesRepository: AiPreferencesRepository,
     private val dailyMixManager: DailyMixManager,
+    private val aiClientFactory: AiClientFactory,
     private val json: Json
 ) {
+    companion object {
+        // Removed DEFAULT_GEMINI_MODEL - now handled by provider implementations
+    }
+
     private val promptCache: MutableMap<String, List<String>> = object : LinkedHashMap<String, List<String>>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<String>>?): Boolean = size > 20
     }
@@ -26,10 +32,22 @@ class AiPlaylistGenerator @Inject constructor(
         candidateSongs: List<Song>? = null
     ): Result<List<Song>> {
         return try {
-            val apiKey = userPreferencesRepository.geminiApiKey.first()
-            if (apiKey.isBlank()) {
-                return Result.failure(Exception("API Key not configured."))
+            // Get AI provider and create client
+            val providerName = aiPreferencesRepository.aiProvider.first()
+            val provider = AiProvider.fromString(providerName)
+            
+            // Get API key based on provider
+            val apiKey = when (provider) {
+                AiProvider.GEMINI -> aiPreferencesRepository.geminiApiKey.first()
+                AiProvider.DEEPSEEK -> aiPreferencesRepository.deepseekApiKey.first()
             }
+            
+            if (apiKey.isBlank()) {
+                return Result.failure(Exception("API Key not configured for ${provider.displayName}."))
+            }
+            
+            // Create AI client
+            val aiClient = aiClientFactory.createClient(provider, apiKey)
 
             val normalizedPrompt = userPrompt.trim().lowercase()
             promptCache[normalizedPrompt]?.let { cachedIds ->
@@ -40,13 +58,12 @@ class AiPlaylistGenerator @Inject constructor(
                 }
             }
 
-            val selectedModel = userPreferencesRepository.geminiModel.first()
-            val modelName = selectedModel.ifEmpty { "" }
-
-            val generativeModel = GenerativeModel(
-                modelName = modelName,
-                apiKey = apiKey
-            )
+            // Get model based on provider
+            val selectedModel = when (provider) {
+                AiProvider.GEMINI -> aiPreferencesRepository.geminiModel.first()
+                AiProvider.DEEPSEEK -> aiPreferencesRepository.deepseekModel.first()
+            }
+            val modelName = selectedModel.ifBlank { aiClient.getDefaultModel() }
 
             val samplingPool = when {
                 candidateSongs.isNullOrEmpty().not() -> candidateSongs ?: allSongs
@@ -65,9 +82,9 @@ class AiPlaylistGenerator @Inject constructor(
             val sampleSize = max(minLength, 80).coerceAtMost(200)
             val songSample = samplingPool.shuffled().take(sampleSize)
 
+            val songScores = songSample.associate { it.id to dailyMixManager.getScore(it.id) }
             val availableSongsJson = songSample.joinToString(separator = ",\n") { song ->
-                // Calculate score for each song. This might be slow if it's a real-time calculation.
-                val score = dailyMixManager.getScore(song.id)
+                val score = songScores[song.id] ?: 0.0
                 """
                 {
                     "id": "${song.id}",
@@ -79,8 +96,11 @@ class AiPlaylistGenerator @Inject constructor(
                 """.trimIndent()
             }
 
-            // Get the custom system prompt from user preferences
-            val customSystemPrompt = userPreferencesRepository.geminiSystemPrompt.first()
+            // Get provider-specific custom system prompt from user preferences
+            val customSystemPrompt = when (provider) {
+                AiProvider.GEMINI -> aiPreferencesRepository.geminiSystemPrompt.first()
+                AiProvider.DEEPSEEK -> aiPreferencesRepository.deepseekSystemPrompt.first()
+            }
 
             // Build the task-specific instructions
             val taskInstructions = """
@@ -113,8 +133,7 @@ class AiPlaylistGenerator @Inject constructor(
             ]
             """.trimIndent()
 
-            val response = generativeModel.generateContent(fullPrompt)
-            val responseText = response.text ?: return Result.failure(Exception("AI returned an empty response."))
+            val responseText = aiClient.generateContent(modelName, fullPrompt)
 
             val songIds = extractPlaylistSongIds(responseText)
 
@@ -131,7 +150,11 @@ class AiPlaylistGenerator @Inject constructor(
         } catch (e: IllegalArgumentException) {
             Result.failure(Exception(e.message ?: "AI response did not contain a valid playlist."))
         } catch (e: Exception) {
-            Result.failure(Exception("AI Error: ${e.message}"))
+            val errorDetails = e.message?.takeIf { it.isNotBlank() }
+                ?: e.cause?.message?.takeIf { it.isNotBlank() }
+                ?: e::class.simpleName
+                ?: "Unknown error"
+            Result.failure(Exception("AI Error: $errorDetails", e))
         }
     }
 

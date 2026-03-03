@@ -1,7 +1,7 @@
 package com.theveloper.pixelplay.presentation.screens.search.components
 
 import androidx.annotation.OptIn
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,8 +20,8 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.GridView
-import androidx.compose.material.icons.rounded.ViewList
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -69,13 +69,13 @@ fun GenreCategoriesGrid(
     }
 
     val systemNavBarHeight = getNavigationBarHeight()
-    val customGenreIcons = playerViewModel.customGenreIcons.collectAsState(
-        initial = emptyMap(),
+    val customGenreIcons = playerViewModel.customGenreIcons.collectAsStateWithLifecycle(
+        initialValue = emptyMap(),
         context = kotlin.coroutines.EmptyCoroutineContext
     ).value
 
     // Persistence: Collect from ViewModel
-    val isGridView by playerViewModel.isGenreGridView.collectAsState()
+    val isGridView by playerViewModel.isGenreGridView.collectAsStateWithLifecycle()
 
     LazyVerticalGrid(
         columns = if (isGridView) GridCells.Fixed(2) else GridCells.Fixed(1),
@@ -128,8 +128,8 @@ fun GenreCategoriesGrid(
                     ),
                     shape = RoundedCornerShape(shape.value.dp)
                 ) {
-                    androidx.compose.material3.Icon(
-                        imageVector = if (isGridView) Icons.Rounded.ViewList else Icons.Rounded.GridView,
+                androidx.compose.material3.Icon(
+                        imageVector = if (isGridView) Icons.AutoMirrored.Rounded.ViewList else Icons.Rounded.GridView,
                         contentDescription = "Toggle Grid/List View"
                     )
                 }

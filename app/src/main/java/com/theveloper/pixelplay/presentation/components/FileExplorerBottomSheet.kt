@@ -36,7 +36,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Done
@@ -56,14 +55,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MediumFlexibleTopAppBar
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -187,6 +185,13 @@ fun FileExplorerContent(
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
+    val safeSelectedStorageIndex = remember(availableStorages, selectedStorageIndex) {
+        if (availableStorages.isEmpty()) {
+            0
+        } else {
+            selectedStorageIndex.coerceIn(0, availableStorages.lastIndex)
+        }
+    }
 
     Scaffold(
         modifier = modifier,
@@ -263,48 +268,36 @@ fun FileExplorerContent(
         ) {
             // Only show storage tabs if there's more than one storage
             if (availableStorages.size > 1) {
-                TabRow(
+                PrimaryTabRow(
                     modifier = Modifier
                         .fillMaxWidth(),
-                    selectedTabIndex = selectedStorageIndex,
+                    selectedTabIndex = safeSelectedStorageIndex,
                     containerColor = Color.Transparent,
-                    indicator = { tabPositions ->
-                        if (selectedStorageIndex < tabPositions.size) {
-                            TabRowDefaults.PrimaryIndicator(
-                                modifier = Modifier.tabIndicatorOffset(tabPositions[selectedStorageIndex]),
-                                height = 3.dp,
-                                color = Color.Transparent
-                            )
-                        }
+                    indicator = {
+                        TabRowDefaults.PrimaryIndicator(
+                            modifier = Modifier.tabIndicatorOffset(
+                                selectedTabIndex = safeSelectedStorageIndex,
+                                matchContentSize = true
+                            ),
+                            height = 3.dp,
+                            color = Color.Transparent
+                        )
                     },
                     divider = {}
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(0.dp)
-                    ) {
-                        availableStorages.forEachIndexed { index, storage ->
-                            if (index == 0) {
-                                Spacer(modifier = Modifier.width(14.dp))
-                            }
-                            TabAnimation(
-                                modifier = Modifier.weight(1f),
-                                index = index,
-                                title = storage.displayName,
-                                selectedIndex = selectedStorageIndex,
-                                onClick = { onStorageSelected(index) }
-                            ) {
-                                Text(
-                                    text = storage.displayName,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    fontFamily = GoogleSansRounded
-                                )
-                            }
-                            if (index == availableStorages.lastIndex) {
-                                Spacer(modifier = Modifier.width(14.dp))
-                            }
+                    availableStorages.forEachIndexed { index, storage ->
+                        TabAnimation(
+                            index = index,
+                            title = storage.displayName,
+                            selectedIndex = safeSelectedStorageIndex,
+                            onClick = { onStorageSelected(index) }
+                        ) {
+                            Text(
+                                text = storage.displayName,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                fontFamily = GoogleSansRounded
+                            )
                         }
                     }
                 }
