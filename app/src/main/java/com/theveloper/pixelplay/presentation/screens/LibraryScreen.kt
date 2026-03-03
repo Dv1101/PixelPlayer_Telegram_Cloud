@@ -548,6 +548,7 @@ fun LibraryScreen(
     val playlistMultiSelectionState = playerViewModel.playlistSelectionStateHolder
     val selectedPlaylists by playlistMultiSelectionState.selectedPlaylists.collectAsStateWithLifecycle()
     val selectedPlaylistIds by playlistMultiSelectionState.selectedPlaylistIds.collectAsStateWithLifecycle()
+    val isPlaylistSelectionMode by playlistMultiSelectionState.isSelectionMode.collectAsStateWithLifecycle()
     var showPlaylistMultiSelectionSheet by remember { mutableStateOf(false) }
     var showMergePlaylistDialog by remember { mutableStateOf(false) }
     var pendingMergePlaylistIds by remember { mutableStateOf(emptyList<String>()) }
@@ -603,13 +604,50 @@ fun LibraryScreen(
         }
     }
 
-    BackHandler(
-        enabled =
-            currentTabId == LibraryTabId.FOLDERS &&
-                    canNavigateBackInFolders &&
-                    !isSortSheetVisible
-    ) {
-        playerViewModel.navigateBackFolder()
+    val hasSelectionInCurrentTab = when (currentTabId) {
+        LibraryTabId.PLAYLISTS -> isPlaylistSelectionMode
+        LibraryTabId.ALBUMS -> isAlbumSelectionMode
+        LibraryTabId.SONGS,
+        LibraryTabId.LIKED,
+        LibraryTabId.FOLDERS -> isSelectionMode
+        LibraryTabId.ARTISTS -> false
+    }
+    val canHandleFolderBack =
+        currentTabId == LibraryTabId.FOLDERS &&
+            canNavigateBackInFolders &&
+            !isSortSheetVisible
+
+    BackHandler(enabled = hasSelectionInCurrentTab || canHandleFolderBack) {
+        when {
+            hasSelectionInCurrentTab -> {
+                when (currentTabId) {
+                    LibraryTabId.PLAYLISTS -> {
+                        playlistMultiSelectionState.clearSelection()
+                        showPlaylistMultiSelectionSheet = false
+                        showMergePlaylistDialog = false
+                        pendingMergePlaylistIds = emptyList()
+                    }
+
+                    LibraryTabId.ALBUMS -> {
+                        selectedAlbums = emptyList()
+                        showAlbumMultiSelectionSheet = false
+                    }
+
+                    LibraryTabId.SONGS,
+                    LibraryTabId.LIKED,
+                    LibraryTabId.FOLDERS -> {
+                        multiSelectionState.clearSelection()
+                        showMultiSelectionSheet = false
+                    }
+
+                    LibraryTabId.ARTISTS -> Unit
+                }
+            }
+
+            canHandleFolderBack -> {
+                playerViewModel.navigateBackFolder()
+            }
+        }
     }
 
     // Feedback for Playlist Creation
@@ -944,8 +982,6 @@ fun LibraryScreen(
 
                         val playlistUiState by playlistViewModel.uiState.collectAsStateWithLifecycle()
                         val stablePlayerState by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
-                        val isPlaylistSelectionMode by playlistMultiSelectionState.isSelectionMode.collectAsStateWithLifecycle()
-
                         val favoritePagingItems = libraryViewModel.favoritesPagingFlow.collectAsLazyPagingItems()
 
                         val currentSelectedSortOption: SortOption? = when (currentTabId) {
