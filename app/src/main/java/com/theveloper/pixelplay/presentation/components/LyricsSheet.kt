@@ -697,7 +697,10 @@ fun LyricsSheet(
                             .size(78.dp)
                             .clip(RoundedCornerShape(playPauseCornerRadius))
                             .background(tertiaryColor)
-                            .clickable(onClick = onPlayPause),
+                            .clickable { 
+                                hapticFeedback.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onPlayPause() 
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                          AnimatedContent(
