@@ -2,6 +2,7 @@ package com.theveloper.pixelplay.presentation.components
 
 import android.Manifest
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -11,6 +12,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -58,6 +60,7 @@ import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.BluetoothDisabled
+import androidx.compose.material.icons.rounded.BatteryFull
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Speaker
 import androidx.compose.material.icons.rounded.Tv
@@ -130,12 +133,12 @@ import androidx.media3.common.util.UnstableApi
 import androidx.mediarouter.media.MediaRouter
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.presentation.screens.TabAnimation
+import com.theveloper.pixelplay.presentation.viewmodel.BluetoothAudioDeviceState
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.ui.theme.GoogleSansRounded
 import racra.compose.smooth_corner_rect_library.AbsoluteSmoothCornerShape
 import android.content.pm.PackageManager
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -171,7 +174,7 @@ fun CastBottomSheet(
     val wifiName by playerViewModel.wifiName.collectAsStateWithLifecycle()
     val isBluetoothEnabled by playerViewModel.isBluetoothEnabled.collectAsStateWithLifecycle()
     val bluetoothName by playerViewModel.bluetoothName.collectAsStateWithLifecycle()
-    val bluetoothAudioDevices by playerViewModel.bluetoothAudioDevices.collectAsStateWithLifecycle()
+    val bluetoothAudioDeviceStates by playerViewModel.bluetoothAudioDeviceStates.collectAsStateWithLifecycle()
     val isRemotePlaybackActive by playerViewModel.isRemotePlaybackActive.collectAsStateWithLifecycle()
     val isCastConnecting by playerViewModel.isCastConnecting.collectAsStateWithLifecycle()
     val trackVolume by playerViewModel.trackVolume.collectAsStateWithLifecycle()
@@ -182,6 +185,7 @@ fun CastBottomSheet(
         buildList {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 add(Manifest.permission.BLUETOOTH_CONNECT)
+                add(Manifest.permission.BLUETOOTH_SCAN)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 add(Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -196,14 +200,14 @@ fun CastBottomSheet(
     ) {
         missingPermissions = missingCastPermissions(context, requiredPermissions)
         if (missingPermissions.isEmpty()) {
-            playerViewModel.refreshLocalConnectionInfo()
+            playerViewModel.refreshLocalConnectionInfo(refreshBluetoothDevices = true)
         }
     }
 
     LaunchedEffect(Unit) {
         missingPermissions = missingCastPermissions(context, requiredPermissions)
         if (missingPermissions.isEmpty()) {
-            playerViewModel.refreshLocalConnectionInfo()
+            playerViewModel.refreshLocalConnectionInfo(refreshBluetoothDevices = true)
         }
     }
 
@@ -215,13 +219,15 @@ fun CastBottomSheet(
     } else {
         emptyList()
     }
-    val bluetoothDeviceNames = bluetoothAudioDevices
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-        .distinct()
+    val bluetoothDevices = bluetoothAudioDeviceStates
+        .map { state -> state.copy(name = state.name.trim()) }
+        .filter { it.name.isNotEmpty() }
+        .distinctBy { it.stableId() }
     val activeBluetoothName = bluetoothName
         ?.trim()
-        ?.takeIf { it.isNotEmpty() && it in bluetoothDeviceNames }
+        ?.takeIf { activeName ->
+            activeName.isNotEmpty() && bluetoothDevices.any { it.name == activeName }
+        }
 
     val devices = buildList {
         if (isWifiEnabled) {
@@ -254,12 +260,12 @@ fun CastBottomSheet(
         }
 
         if (isBluetoothEnabled) {
-            bluetoothDeviceNames.forEach { name ->
-                val isConnected = name == activeBluetoothName
+            bluetoothDevices.forEach { bluetoothDevice ->
+                val isConnected = bluetoothDevice.name == activeBluetoothName
                 add(
                     CastDeviceUi(
-                        id = "bluetooth_$name",
-                        name = name,
+                        id = "bluetooth_${bluetoothDevice.stableId()}",
+                        name = bluetoothDevice.name,
                         deviceType = MediaRouter.RouteInfo.DEVICE_TYPE_BLUETOOTH_A2DP,
                         playbackType = MediaRouter.RouteInfo.PLAYBACK_TYPE_LOCAL,
                         connectionState = if (isConnected) {
@@ -271,6 +277,7 @@ fun CastBottomSheet(
                         volume = if (isConnected) (trackVolume * 100).toInt() else 0,
                         volumeMax = 100,
                         isSelected = isConnected && !isRemoteSession,
+                        batteryPercent = bluetoothDevice.batteryPercent,
                         isBluetooth = true
                     )
                 )
@@ -360,7 +367,14 @@ fun CastBottomSheet(
                     CastSheetContent(
                         state = uiState,
                         onSelectDevice = { id ->
-                            routes.firstOrNull { it.id == id }?.let { playerViewModel.selectRoute(it) }
+                            when {
+                                id.startsWith("bluetooth_") -> {
+                                    val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+                                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    context.startActivity(intent)
+                                }
+                                else -> routes.firstOrNull { it.id == id }?.let { playerViewModel.selectRoute(it) }
+                            }
                         },
                         onDisconnect = {
                             playerViewModel.disconnect()
@@ -383,7 +397,10 @@ fun CastBottomSheet(
                             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             context.startActivity(intent)
                         },
-                        onRefresh = { playerViewModel.refreshCastRoutes() },
+                        onRefresh = {
+                            playerViewModel.refreshCastRoutes()
+                            playerViewModel.refreshLocalConnectionInfo(refreshBluetoothDevices = true)
+                        },
                         startWithControls = isRemoteSession
                     )
                 }
@@ -402,6 +419,7 @@ private data class CastDeviceUi(
     val volume: Int,
     val volumeMax: Int,
     val isSelected: Boolean,
+    val batteryPercent: Int? = null,
     val isBluetooth: Boolean = false
 )
 
@@ -428,6 +446,10 @@ private data class CastSheetUiState(
     val isBluetoothEnabled: Boolean,
     val bluetoothName: String? = null
 )
+
+private fun BluetoothAudioDeviceState.stableId(): String {
+    return address ?: name.lowercase()
+}
 
 @Composable
 private fun CastPermissionStep(
@@ -564,6 +586,13 @@ private fun CastSheetContent(
         pageCount = { 2 }
     )
     val scope = rememberCoroutineScope()
+    var heightAnimationEnabled by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        withFrameNanos { }
+        heightAnimationEnabled = true
+    }
 
     Column(
         modifier = Modifier
@@ -609,7 +638,11 @@ private fun CastSheetContent(
                 .fillMaxWidth()
                 .heightIn(max = maxPagerHeight)
                 .animateContentSize(
-                    animationSpec = tween(durationMillis = 280),
+                    animationSpec = if (heightAnimationEnabled) {
+                        tween(durationMillis = 280, easing = FastOutSlowInEasing)
+                    } else {
+                        snap()
+                    },
                     alignment = Alignment.TopCenter
                 )
         ) {
@@ -1500,8 +1533,8 @@ private fun CastDeviceRow(
     onDisconnect: () -> Unit
 ) {
     val (containerColor, onContainer) = when {
-        device.isBluetooth -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
         device.isSelected -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
+        device.isBluetooth -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
         else -> MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurface
     }
 
@@ -1537,8 +1570,9 @@ private fun CastDeviceRow(
             .fillMaxWidth()
             .clip(CircleShape) // Mantenemos el clip circular para el ripple
             .clickable(
-                enabled = !device.isBluetooth,
+                enabled = true,
                 onClick = when {
+                    device.isBluetooth -> onSelect
                     device.isSelected &&
                         device.connectionState == MediaRouter.RouteInfo.CONNECTION_STATE_CONNECTED -> onDisconnect
                     device.isSelected &&
@@ -1605,7 +1639,9 @@ private fun CastDeviceRow(
                 Spacer(modifier = Modifier.height(4.dp))
 
                 val statusText = when {
-                    device.isBluetooth -> "Bluetooth Audio"
+                    device.isBluetooth &&
+                        device.connectionState == MediaRouter.RouteInfo.CONNECTION_STATE_CONNECTED -> "Connected"
+                    device.isBluetooth -> "Available to connect"
                     device.isSelected && device.connectionState == MediaRouter.RouteInfo.CONNECTION_STATE_CONNECTED -> "Connected"
                     device.isSelected && device.connectionState == MediaRouter.RouteInfo.CONNECTION_STATE_CONNECTING -> "Connecting"
                     else -> "Available"
@@ -1620,17 +1656,70 @@ private fun CastDeviceRow(
                 )
             }
 
-            // Trailing Content (Volumen)
-            if (device.volumeHandling == MediaRouter.RouteInfo.PLAYBACK_VOLUME_VARIABLE && device.isSelected) {
-                Text(
-                    text = "${device.volume}/${device.volumeMax}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = onContainer,
-                    modifier = Modifier.padding(end = 4.dp)
-                )
+            when {
+                device.isBluetooth && device.isSelected -> {
+                    BluetoothMetricIndicator(
+                        device = device,
+                        contentColor = onContainer,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                }
+                device.volumeHandling == MediaRouter.RouteInfo.PLAYBACK_VOLUME_VARIABLE && device.isSelected -> {
+                    Text(
+                        text = "${device.volume}/${device.volumeMax}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = onContainer,
+                        modifier = Modifier.padding(end = 4.dp)
+                    )
+                }
             }
         }
     }
+}
+
+@Composable
+private fun BluetoothMetricIndicator(
+    device: CastDeviceUi,
+    contentColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val batteryPercent = device.batteryPercent
+    val value = batteryPercent ?: buildBluetoothVolumePercent(device)
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        if (batteryPercent != null) {
+            Icon(
+                imageVector = Icons.Rounded.BatteryFull,
+                contentDescription = "Battery level",
+                tint = contentColor,
+                modifier = Modifier.size(14.dp)
+            )
+        } else {
+            Icon(
+                painter = painterResource(R.drawable.rounded_volume_up_24),
+                contentDescription = "Volume level",
+                tint = contentColor,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+
+        Text(
+            text = "$value%",
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor
+        )
+    }
+}
+
+private fun buildBluetoothVolumePercent(device: CastDeviceUi): Int {
+    return when {
+        device.volumeMax > 0 -> ((device.volume.toFloat() / device.volumeMax) * 100).roundToInt()
+        else -> device.volume
+    }.coerceIn(0, 100)
 }
 
 @Composable

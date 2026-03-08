@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"/>
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
@@ -50,8 +51,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
+                <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.LAUNCHER" />
                 <category android:name="android.intent.category.APP_MUSIC" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MUSIC_PLAYER" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
             <intent-filter>
                 <action android:name="com.theveloper.pixelplay.action.OPEN_PLAYER" />
@@ -84,6 +90,12 @@
             android:name=".presentation.qqmusic.auth.QqMusicLoginActivity"
             android:exported="false"
             android:label="QQ Music Login"
+            android:theme="@style/Theme.PixelPlay" />
+
+        <activity
+            android:name=".presentation.navidrome.auth.NavidromeLoginActivity"
+            android:exported="false"
+            android:label="Navidrome Login"
             android:theme="@style/Theme.PixelPlay" />
 
 

@@ -125,6 +125,13 @@ android {
     }
 }
 
+composeCompiler {
+    // Applies Compose's strong skipping optimization (skip composables whose parameters
+    // haven't changed) in Debug builds as well, making dev-mode performance more
+    // representative of Release and reducing unnecessary recompositions during development.
+    enableStrongSkippingMode = true
+}
+
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
     arg("room.incremental", "true")
@@ -132,7 +139,6 @@ ksp {
 }
 
 dependencies {
-    implementation(libs.quickjs)
     implementation(libs.androidx.profileinstaller)
     implementation(libs.androidx.paging.common)
     "baselineProfile"(project(":baselineprofile"))
@@ -295,14 +301,12 @@ dependencies {
     implementation(libs.accompanist.permissions)
 
     //Audio editing
-    // Spleeter para separación de audio y Amplituda para procesar formas de onda
+    // Spleeter para separación de audio
     //implementation(libs.tensorflow.lite)
     //implementation(libs.tensorflow.lite.support)
     ///implementation(libs.tensorflow.lite.select.tf.ops)
-    implementation(libs.amplituda)
 
     // Compose-audiowaveform para la UI
-    implementation(libs.compose.audiowaveform)
 
     // Media3 Transformer (ya debería estar, pero asegúrate)
     implementation(libs.androidx.media3.transformer)

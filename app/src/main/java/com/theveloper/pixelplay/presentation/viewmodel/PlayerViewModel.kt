@@ -377,7 +377,7 @@ class PlayerViewModel @Inject constructor(
     val navBarStyle: StateFlow<String> = userPreferencesRepository.navBarStyleFlow
         .stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
+            started = SharingStarted.Eagerly,
             initialValue = NavBarStyle.DEFAULT
         )
 
@@ -568,6 +568,7 @@ class PlayerViewModel @Inject constructor(
     val wifiName: StateFlow<String?> = connectivityStateHolder.wifiName
     val isBluetoothEnabled: StateFlow<Boolean> = connectivityStateHolder.isBluetoothEnabled
     val bluetoothName: StateFlow<String?> = connectivityStateHolder.bluetoothName
+    val bluetoothAudioDeviceStates: StateFlow<List<BluetoothAudioDeviceState>> = connectivityStateHolder.bluetoothAudioDeviceStates
     val bluetoothAudioDevices: StateFlow<List<String>> = connectivityStateHolder.bluetoothAudioDevices
 
 
@@ -836,18 +837,7 @@ class PlayerViewModel @Inject constructor(
 
     fun shuffleAllSongs() {
         Log.d("ShuffleDebug", "shuffleAllSongs called.")
-        // Don't use ExoPlayer's shuffle mode - we manually shuffle instead
-        val currentSong = playbackStateHolder.stablePlayerState.value.currentSong
-        val isPlaying = playbackStateHolder.stablePlayerState.value.isPlaying
-
-        // If something is playing, just toggle shuffle on current queue
-        if (currentSong != null && isPlaying) {
-            if (!playbackStateHolder.stablePlayerState.value.isShuffleEnabled) {
-                toggleShuffle()
-            }
-            return
-        }
-
+        
         // Load random songs from DB instead of materializing the entire library
         viewModelScope.launch {
             val randomSongs = musicRepository.getRandomSongs(limit = 500)
@@ -917,17 +907,6 @@ class PlayerViewModel @Inject constructor(
 
     fun shuffleFavoriteSongs() {
         Log.d("ShuffleDebug", "shuffleFavoriteSongs called.")
-        // Don't use ExoPlayer's shuffle mode - we manually shuffle instead
-        val currentSong = playbackStateHolder.stablePlayerState.value.currentSong
-        val isPlaying = playbackStateHolder.stablePlayerState.value.isPlaying
-
-        // If something is playing, just toggle shuffle on current queue
-        if (currentSong != null && isPlaying) {
-            if (!playbackStateHolder.stablePlayerState.value.isShuffleEnabled) {
-                toggleShuffle()
-            }
-            return
-        }
 
         // Load favorite songs from DB on-demand instead of holding them in memory
         viewModelScope.launch {
@@ -1056,8 +1035,8 @@ class PlayerViewModel @Inject constructor(
     }
 
     // Connectivity refresh delegated to ConnectivityStateHolder
-    fun refreshLocalConnectionInfo() {
-        connectivityStateHolder.refreshLocalConnectionInfo()
+    fun refreshLocalConnectionInfo(refreshBluetoothDevices: Boolean = false) {
+        connectivityStateHolder.refreshLocalConnectionInfo(refreshBluetoothDevices)
     }
 
     init {
@@ -2010,6 +1989,18 @@ class PlayerViewModel @Inject constructor(
                 (castStateHolder.isRemotePlaybackActive.value || castStateHolder.isCastConnecting.value)
     }
 
+    private fun syncPlaybackPositionFromPlayer(
+        mediaId: String?,
+        reportedPositionMs: Long
+    ): Long {
+        playbackStateHolder.syncCurrentPositionFromPlayer(mediaId, reportedPositionMs)
+        val resolvedPosition = playbackStateHolder.currentPosition.value
+        if (resolvedPosition != _playerUiState.value.currentPosition) {
+            _playerUiState.update { it.copy(currentPosition = resolvedPosition) }
+        }
+        return resolvedPosition
+    }
+
     private fun setupMediaControllerListeners() {
         Trace.beginSection("PlayerViewModel.setupMediaControllerListeners")
         val playerCtrl = mediaController ?: return Trace.endSection()
@@ -2028,6 +2019,7 @@ class PlayerViewModel @Inject constructor(
         updateCurrentPlaybackQueueFromPlayer(playerCtrl)
 
         playerCtrl.currentMediaItem?.let { mediaItem ->
+            playbackStateHolder.ensureCurrentPlaybackOccurrence(mediaItem.mediaId)
             val song = resolveSongFromMediaItem(mediaItem)
 
             if (song != null) {
@@ -2043,8 +2035,7 @@ class PlayerViewModel @Inject constructor(
                         totalDuration = resolvedDuration
                     )
                 }
-                playbackStateHolder.setCurrentPosition(initialPosition)
-                _playerUiState.update { it.copy(currentPosition = initialPosition) }
+                syncPlaybackPositionFromPlayer(mediaItem.mediaId, initialPosition)
                 viewModelScope.launch {
                     val uri = song.albumArtUriString?.toUri()
                     val currentUri = playbackStateHolder.stablePlayerState.value.currentSong?.albumArtUriString
@@ -2068,6 +2059,7 @@ class PlayerViewModel @Inject constructor(
                         playWhenReady = false
                     )
                 }
+                playbackStateHolder.clearCurrentPositionHints()
                 playbackStateHolder.setCurrentPosition(0L)
                 _playerUiState.update { it.copy(currentPosition = 0L) }
                 resetPlaybackAudioMetadata()
@@ -2098,10 +2090,7 @@ class PlayerViewModel @Inject constructor(
                 } else {
                     stopProgressUpdates()
                     val pausedPosition = playerCtrl.currentPosition.coerceAtLeast(0L)
-                    playbackStateHolder.setCurrentPosition(pausedPosition)
-                    if (pausedPosition != _playerUiState.value.currentPosition) {
-                        _playerUiState.update { it.copy(currentPosition = pausedPosition) }
-                    }
+                    syncPlaybackPositionFromPlayer(playerCtrl.currentMediaItem?.mediaId, pausedPosition)
                 }
             }
 
@@ -2112,6 +2101,7 @@ class PlayerViewModel @Inject constructor(
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 if (isRemoteSessionControllingPlayback()) return
+                playbackStateHolder.onPlaybackOccurrenceTransition(mediaItem?.mediaId)
                 preparePlaybackAudioMetadataForMedia(mediaItem?.mediaId)
                 transitionSchedulerJob?.cancel()
                 lyricsStateHolder.cancelLoading()
@@ -2172,13 +2162,15 @@ class PlayerViewModel @Inject constructor(
                                 playWhenReady = playerCtrl.playWhenReady
                             )
                         }
-                        playbackStateHolder.setCurrentPosition(0L)
-                        _playerUiState.update { it.copy(currentPosition = 0L) }
+                        val transitionPosition = syncPlaybackPositionFromPlayer(
+                            transitionedItem.mediaId,
+                            playerCtrl.currentPosition.coerceAtLeast(0L)
+                        )
 
                         song?.let { currentSongValue ->
                             listeningStatsTracker.onSongChanged(
                                 song = currentSongValue,
-                                positionMs = 0L,
+                                positionMs = transitionPosition,
                                 durationMs = resolvedDuration,
                                 isPlaying = playerCtrl.isPlaying
                             )
@@ -2202,6 +2194,7 @@ class PlayerViewModel @Inject constructor(
                                     totalDuration = 0L
                                 )
                             }
+                            playbackStateHolder.clearCurrentPositionHints()
                             resetPlaybackAudioMetadata()
                         }
                     }
@@ -2213,12 +2206,14 @@ class PlayerViewModel @Inject constructor(
                 refreshPlaybackAudioMetadata(playerCtrl)
                 if (playbackState == Player.STATE_READY) {
                     clearPreparingSongIfMatching(playerCtrl.currentMediaItem?.mediaId)
+                    val readyPosition = playerCtrl.currentPosition.coerceAtLeast(0L)
                     val songDurationHint = playbackStateHolder.stablePlayerState.value.currentSong?.duration ?: 0L
                     val resolvedDuration = playbackStateHolder.resolveDurationForPlaybackState(
                         reportedDurationMs = playerCtrl.duration,
                         songDurationHintMs = songDurationHint,
-                        currentPositionMs = playerCtrl.currentPosition.coerceAtLeast(0L)
+                        currentPositionMs = readyPosition
                     )
+                    syncPlaybackPositionFromPlayer(playerCtrl.currentMediaItem?.mediaId, readyPosition)
                     playbackStateHolder.updateStablePlayerState { it.copy(totalDuration = resolvedDuration) }
                     listeningStatsTracker.updateDuration(resolvedDuration)
                     startProgressUpdates()
@@ -2241,6 +2236,7 @@ class PlayerViewModel @Inject constructor(
                                 totalDuration = 0L
                             )
                         }
+                        playbackStateHolder.clearCurrentPositionHints()
                         playbackStateHolder.setCurrentPosition(0L)
                         _playerUiState.update { it.copy(currentPosition = 0L) }
                         resetPlaybackAudioMetadata()
@@ -2891,6 +2887,7 @@ class PlayerViewModel @Inject constructor(
                 val success = metadataEditStateHolder.deleteSong(song)
                 if (success) {
                     removeFromMediaControllerQueue(song.id)
+                    removeSong(song)
                     successCount++
                 }
             }
@@ -3147,6 +3144,10 @@ class PlayerViewModel @Inject constructor(
 
     fun seekTo(position: Long) {
         playbackStateHolder.seekTo(position)
+        val resolvedPosition = playbackStateHolder.currentPosition.value
+        if (resolvedPosition != _playerUiState.value.currentPosition) {
+            _playerUiState.update { it.copy(currentPosition = resolvedPosition) }
+        }
     }
 
     fun nextSong() {

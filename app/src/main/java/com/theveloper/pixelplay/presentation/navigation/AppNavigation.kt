@@ -36,6 +36,7 @@ import com.theveloper.pixelplay.presentation.screens.ArtistDetailScreen
 import com.theveloper.pixelplay.presentation.screens.ArtistSettingsScreen
 import com.theveloper.pixelplay.presentation.screens.DailyMixScreen
 import com.theveloper.pixelplay.presentation.screens.EditTransitionScreen
+import com.theveloper.pixelplay.presentation.screens.EasterEggScreen
 import com.theveloper.pixelplay.presentation.screens.ExperimentalSettingsScreen
 import com.theveloper.pixelplay.presentation.screens.GenreDetailScreen
 import com.theveloper.pixelplay.presentation.screens.HomeScreen
@@ -228,6 +229,9 @@ fun AppNavigation(
                         },
                         onOpenQqMusicDashboard = {
                             navController.navigateSafely(Screen.QqMusicDashboard.route)
+                        },
+                        onOpenNavidromeDashboard = {
+                            navController.navigateSafely(Screen.NavidromeDashboard.route)
                         }
                     )
                 }
@@ -458,6 +462,20 @@ fun AppNavigation(
                 }
             }
             composable(
+                Screen.EasterEgg.route,
+                enterTransition = { enterTransition() },
+                exitTransition = { exitTransition() },
+                popEnterTransition = { popEnterTransition() },
+                popExitTransition = { popExitTransition() },
+            ) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
+                    EasterEggScreen(
+                        viewModel = playerViewModel,
+                        onNavigationIconClick = { navController.popBackStack() },
+                    )
+                }
+            }
+            composable(
                 Screen.ArtistSettings.route,
                 enterTransition = { enterTransition() },
                 exitTransition = { exitTransition() },
@@ -529,6 +547,19 @@ fun AppNavigation(
             ) {
                 ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
                     com.theveloper.pixelplay.presentation.qqmusic.dashboard.QqMusicDashboardScreen(
+                        onBack = { navController.popBackStack() }
+                    )
+                }
+            }
+            composable(
+                Screen.NavidromeDashboard.route,
+                enterTransition = { enterTransition() },
+                exitTransition = { exitTransition() },
+                popEnterTransition = { popEnterTransition() },
+                popExitTransition = { popExitTransition() },
+            ) {
+                ScreenWrapper(navController = navController, playerViewModel = playerViewModel) {
+                    com.theveloper.pixelplay.presentation.navidrome.dashboard.NavidromeDashboardScreen(
                         onBack = { navController.popBackStack() }
                     )
                 }

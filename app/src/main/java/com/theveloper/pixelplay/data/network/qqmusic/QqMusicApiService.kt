@@ -21,7 +21,10 @@ import javax.inject.Singleton
 
 @Singleton
 class QqMusicApiService @Inject constructor(
-    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context
+    @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context,
+    // P1-3: Inject singleton OkHttpClient instead of creating a new one.
+    // Use newBuilder() to share the base connection pool and dispatcher.
+    baseOkHttpClient: OkHttpClient
 ) {
 
     private val cookieStore: MutableMap<String, MutableList<Cookie>> = mutableMapOf()
@@ -29,7 +32,7 @@ class QqMusicApiService @Inject constructor(
     @Volatile
     private var persistedCookies: Map<String, String> = emptyMap()
 
-    private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
+    private val okHttpClient: OkHttpClient = baseOkHttpClient.newBuilder()
         .cookieJar(object : CookieJar {
             override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
                 val host = url.host
@@ -83,14 +86,15 @@ class QqMusicApiService @Inject constructor(
     /**
      * Get user's playlists (created and collected).
      */
-    suspend fun getUserPlaylists(): String = withContext(Dispatchers.IO) {
+    suspend fun getUserPlaylists(start: Int = 0, count: Int = 100): String = withContext(Dispatchers.IO) {
         val uin = extractUin()
         val gtk = getGTK()
+        val ein = (start + count - 1).coerceAtLeast(start)
         Timber.d("getUserPlaylists: uin=$uin, gtk=$gtk")
         val url = "https://c.y.qq.com/fav/fcgi-bin/fcg_get_profile_order_asset.fcg?" +
                 "format=json&inCharset=utf-8&outCharset=utf-8&notice=0" +
                 "&platform=yqq&needNewCode=1" +
-                "&uin=$uin&g_tk=$gtk&cid=205360956&userid=$uin&reqtype=3&sin=0&ein=100"
+                "&uin=$uin&g_tk=$gtk&cid=205360956&userid=$uin&reqtype=3&sin=$start&ein=$ein"
 
         makeGetRequest(url)
     }
@@ -98,11 +102,16 @@ class QqMusicApiService @Inject constructor(
     /**
      * Get playlist detail including all songs.
      */
-    suspend fun getPlaylistDetail(playlistId: Long): String = withContext(Dispatchers.IO) {
+    suspend fun getPlaylistDetail(
+        playlistId: Long,
+        songBegin: Int = 0,
+        songNum: Int = 1000
+    ): String = withContext(Dispatchers.IO) {
         val gtk = getGTK()
         val url = "https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg?" +
                 "type=1&json=1&utf8=1&onlysong=0" +
-                "&disstid=$playlistId&g_tk=$gtk&format=json&inCharset=utf-8&outCharset=utf-8"
+                "&disstid=$playlistId&song_begin=$songBegin&song_num=$songNum" +
+                "&g_tk=$gtk&format=json&inCharset=utf-8&outCharset=utf-8"
 
         makeGetRequest(url)
     }

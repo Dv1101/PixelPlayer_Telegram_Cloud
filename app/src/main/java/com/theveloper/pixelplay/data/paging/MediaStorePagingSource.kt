@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.paging.PagingSource
 import androidx.paging.PagingState
 import com.theveloper.pixelplay.data.model.Song
+import com.theveloper.pixelplay.utils.AlbumArtUtils
 import com.theveloper.pixelplay.utils.normalizeMetadataText
 import com.theveloper.pixelplay.utils.normalizeMetadataTextOrEmpty
 import kotlinx.coroutines.Dispatchers
@@ -128,6 +129,7 @@ class MediaStorePagingSource(
                 val id = cursor.getLong(idCol)
                 val albumId = cursor.getLong(albumIdCol)
                 val path = cursor.getString(pathCol)
+                val albumArtUriString = AlbumArtUtils.getCachedAlbumArtUri(context, id)?.toString()
 
                 val song = Song(
                     id = id.toString(),
@@ -140,15 +142,12 @@ class MediaStorePagingSource(
                     albumArtist = if (albumArtistCol != -1) cursor.getString(albumArtistCol).normalizeMetadataText() else null,
                     path = path,
                     contentUriString = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id).toString(),
-                    albumArtUriString = ContentUris.withAppendedId(
-                        android.net.Uri.parse("content://media/external/audio/albumart"),
-                        albumId
-                    ).toString(),
+                    albumArtUriString = albumArtUriString,
                     duration = cursor.getLong(durationCol),
                     genre = songIdToGenreMap[id],
                     lyrics = null,
                     isFavorite = false, // Not critical for paging source display usually, or passed in?
-                    trackNumber = cursor.getInt(trackCol),
+                    trackNumber = cursor.getInt(trackCol) % 1000,
                     year = cursor.getInt(yearCol),
                     dateAdded = cursor.getLong(dateAddedCol),
                     dateModified = cursor.getLong(dateModifiedCol),

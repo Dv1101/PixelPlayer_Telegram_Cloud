@@ -26,9 +26,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PlaylistEntity::class,
         PlaylistSongEntity::class,
         QqMusicSongEntity::class,
-        QqMusicPlaylistEntity::class
+        QqMusicPlaylistEntity::class,
+        NavidromeSongEntity::class,
+        NavidromePlaylistEntity::class
     ],
-    version = 28, // Incremented for QQ Music support
+    version = 30, // Fix Navidrome playlist_id affinity drift
 
     exportSchema = true
 )
@@ -45,6 +47,7 @@ abstract class PixelPlayDatabase : RoomDatabase() {
     abstract fun gdriveDao(): GDriveDao
     abstract fun localPlaylistDao(): LocalPlaylistDao
     abstract fun qqmusicDao(): QqMusicDao
+    abstract fun navidromeDao(): NavidromeDao
 
     companion object {
         // Gap-bridging no-op migrations for missing version ranges.
@@ -749,6 +752,156 @@ abstract class PixelPlayDatabase : RoomDatabase() {
                     )
                 """.trimIndent())
             }
+        }
+
+        /**
+         * Add Navidrome/Subsonic support tables.
+         */
+        val MIGRATION_28_29 = object : Migration(28, 29) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS navidrome_playlists (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        comment TEXT,
+                        owner TEXT,
+                        cover_art_id TEXT,
+                        song_count INTEGER NOT NULL,
+                        duration INTEGER NOT NULL,
+                        public INTEGER NOT NULL,
+                        last_sync_time INTEGER NOT NULL
+                    )
+                """.trimIndent())
+
+                recreateNavidromeSongsTable(db)
+            }
+        }
+
+        /**
+         * Reconcile older Navidrome caches that were created with playlist_id stored as INTEGER.
+         */
+        val MIGRATION_29_30 = object : Migration(29, 30) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                recreateNavidromeSongsTable(db)
+            }
+        }
+
+        private fun recreateNavidromeSongsTable(db: SupportSQLiteDatabase) {
+            db.execSQL("DROP TABLE IF EXISTS navidrome_songs_new")
+            db.execSQL(
+                """
+                    CREATE TABLE navidrome_songs_new (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        navidrome_id TEXT NOT NULL,
+                        playlist_id TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        artist TEXT NOT NULL,
+                        artist_id TEXT,
+                        album TEXT NOT NULL,
+                        album_id TEXT,
+                        cover_art_id TEXT,
+                        duration INTEGER NOT NULL,
+                        track_number INTEGER NOT NULL,
+                        disc_number INTEGER NOT NULL,
+                        year INTEGER NOT NULL,
+                        genre TEXT,
+                        bitRate INTEGER,
+                        mime_type TEXT,
+                        suffix TEXT,
+                        path TEXT NOT NULL,
+                        date_added INTEGER NOT NULL
+                    )
+                """.trimIndent()
+            )
+
+            if (tableExists(db, "navidrome_songs")) {
+                val columns = getTableColumns(db, "navidrome_songs")
+                val requiredColumns = setOf(
+                    "id",
+                    "navidrome_id",
+                    "playlist_id",
+                    "title",
+                    "artist",
+                    "album",
+                    "duration",
+                    "track_number",
+                    "disc_number",
+                    "year",
+                    "path",
+                    "date_added"
+                )
+
+                if (requiredColumns.all(columns::contains)) {
+                    val artistIdExpr = columnExpr(columns, "artist_id", "NULL")
+                    val albumIdExpr = columnExpr(columns, "album_id", "NULL")
+                    val coverArtIdExpr = columnExpr(columns, "cover_art_id", "NULL")
+                    val genreExpr = columnExpr(columns, "genre", "NULL")
+                    val bitRateExpr = columnExpr(columns, "bitRate", "NULL")
+                    val mimeTypeExpr = columnExpr(columns, "mime_type", "NULL")
+                    val suffixExpr = columnExpr(columns, "suffix", "NULL")
+
+                    db.execSQL(
+                        """
+                            INSERT OR REPLACE INTO navidrome_songs_new (
+                                id,
+                                navidrome_id,
+                                playlist_id,
+                                title,
+                                artist,
+                                artist_id,
+                                album,
+                                album_id,
+                                cover_art_id,
+                                duration,
+                                track_number,
+                                disc_number,
+                                year,
+                                genre,
+                                bitRate,
+                                mime_type,
+                                suffix,
+                                path,
+                                date_added
+                            )
+                            SELECT
+                                id,
+                                navidrome_id,
+                                CAST(playlist_id AS TEXT),
+                                title,
+                                artist,
+                                $artistIdExpr,
+                                album,
+                                $albumIdExpr,
+                                $coverArtIdExpr,
+                                duration,
+                                track_number,
+                                disc_number,
+                                year,
+                                $genreExpr,
+                                $bitRateExpr,
+                                $mimeTypeExpr,
+                                $suffixExpr,
+                                path,
+                                date_added
+                            FROM navidrome_songs
+                            WHERE id IS NOT NULL
+                              AND navidrome_id IS NOT NULL
+                              AND playlist_id IS NOT NULL
+                              AND title IS NOT NULL
+                              AND artist IS NOT NULL
+                              AND album IS NOT NULL
+                              AND path IS NOT NULL
+                        """.trimIndent()
+                    )
+                }
+
+                db.execSQL("DROP TABLE navidrome_songs")
+            }
+
+            db.execSQL("ALTER TABLE navidrome_songs_new RENAME TO navidrome_songs")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_navidrome_songs_navidrome_id ON navidrome_songs(navidrome_id)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_navidrome_songs_playlist_id ON navidrome_songs(playlist_id)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_navidrome_songs_playlist_id_date_added ON navidrome_songs(playlist_id, date_added)")
         }
     }
 }

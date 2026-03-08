@@ -103,7 +103,7 @@ object AppModule {
     @Singleton
     @Provides
     fun providePixelPlayDatabase(@ApplicationContext context: Context): PixelPlayDatabase {
-        return Room.databaseBuilder(
+        val builder = Room.databaseBuilder(
             context.applicationContext,
             PixelPlayDatabase::class.java,
             "pixelplay_database"
@@ -132,7 +132,9 @@ object AppModule {
             PixelPlayDatabase.MIGRATION_24_25,
             PixelPlayDatabase.MIGRATION_25_26,
             PixelPlayDatabase.MIGRATION_26_27,
-            PixelPlayDatabase.MIGRATION_27_28
+            PixelPlayDatabase.MIGRATION_27_28,
+            PixelPlayDatabase.MIGRATION_28_29,
+            PixelPlayDatabase.MIGRATION_29_30
         )
             .addCallback(
                 object : RoomDatabase.Callback() {
@@ -142,8 +144,15 @@ object AppModule {
                     }
                 }
             )
-            .fallbackToDestructiveMigration(dropAllTables = true)
-            .build()
+
+        // P2-4: Only allow destructive migration in debug builds.
+        // In release, a migration bug will crash the app (revealing the problem)
+        // rather than silently wiping user data (playlists, favorites, statistics).
+        if (BuildConfig.DEBUG) {
+            builder.fallbackToDestructiveMigration(dropAllTables = true)
+        }
+
+        return builder.build()
     }
 
     @Singleton
@@ -204,6 +213,12 @@ object AppModule {
     @Provides
     fun provideQqMusicDao(database: PixelPlayDatabase): com.theveloper.pixelplay.data.database.QqMusicDao {
         return database.qqmusicDao()
+    }
+
+    @Singleton
+    @Provides
+    fun provideNavidromeDao(database: PixelPlayDatabase): com.theveloper.pixelplay.data.database.NavidromeDao {
+        return database.navidromeDao()
     }
 
     @Provides

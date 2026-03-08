@@ -71,6 +71,7 @@ import com.theveloper.pixelplay.presentation.components.AlbumArtCollage
 import com.theveloper.pixelplay.presentation.components.BetaInfoBottomSheet
 import com.theveloper.pixelplay.presentation.components.ChangelogBottomSheet
 import com.theveloper.pixelplay.presentation.netease.dashboard.NeteaseDashboardViewModel
+import com.theveloper.pixelplay.presentation.navidrome.dashboard.NavidromeDashboardViewModel
 import com.theveloper.pixelplay.presentation.qqmusic.dashboard.QqMusicDashboardViewModel
 import com.theveloper.pixelplay.presentation.components.DailyMixSection
 import com.theveloper.pixelplay.presentation.components.HomeGradientTopBar
@@ -107,6 +108,7 @@ fun HomeScreen(
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     neteaseViewModel: NeteaseDashboardViewModel = hiltViewModel(),
     qqMusicViewModel: QqMusicDashboardViewModel = hiltViewModel(),
+    navidromeViewModel: NavidromeDashboardViewModel = hiltViewModel(),
     onOpenSidebar: () -> Unit
 ) {
     val context = LocalContext.current
@@ -275,6 +277,12 @@ fun HomeScreen(
                             onClickOpen = {
                                 navController.navigateSafely(Screen.DailyMixScreen.route)
                             },
+                            onNavigateToAlbum = { song ->
+                                navController.navigateSafely(Screen.AlbumDetail.createRoute(song.albumId))
+                            },
+                            onNavigateToArtist = { song ->
+                                navController.navigateSafely(Screen.ArtistDetail.createRoute(song.artistId))
+                            },
                             playerViewModel = playerViewModel
                         )
                     }
@@ -374,6 +382,7 @@ fun HomeScreen(
     if (showStreamingProviderSheet) {
         val isNeteaseLoggedIn by neteaseViewModel.isLoggedIn.collectAsStateWithLifecycle()
         val isQqMusicLoggedIn by qqMusicViewModel.isLoggedIn.collectAsStateWithLifecycle()
+        val isNavidromeLoggedIn by navidromeViewModel.isLoggedIn.collectAsStateWithLifecycle()
         StreamingProviderSheet(
             onDismissRequest = { showStreamingProviderSheet = false },
             isNeteaseLoggedIn = isNeteaseLoggedIn,
@@ -384,6 +393,10 @@ fun HomeScreen(
             onNavigateToQqMusicDashboard = {
                 navController.navigateSafely(Screen.QqMusicDashboard.route)
             },
+            isNavidromeLoggedIn = isNavidromeLoggedIn,
+            onNavigateToNavidromeDashboard = {
+                navController.navigateSafely(Screen.NavidromeDashboard.route)
+            }
         )
     }
 }

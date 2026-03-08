@@ -31,9 +31,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +54,7 @@ import androidx.paging.compose.itemContentType
 import com.theveloper.pixelplay.R
 import com.theveloper.pixelplay.data.model.LibraryTabId
 import com.theveloper.pixelplay.data.model.Song
+import com.theveloper.pixelplay.data.model.SortOption
 import com.theveloper.pixelplay.data.model.StorageFilter
 import com.theveloper.pixelplay.presentation.components.ExpressiveScrollBar
 import com.theveloper.pixelplay.presentation.components.MiniPlayerHeight
@@ -59,6 +62,7 @@ import com.theveloper.pixelplay.presentation.components.subcomps.EnhancedSongLis
 import com.theveloper.pixelplay.presentation.viewmodel.PlayerViewModel
 import com.theveloper.pixelplay.presentation.viewmodel.StablePlayerState
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @androidx.annotation.OptIn(UnstableApi::class)
@@ -75,16 +79,24 @@ fun LibraryFavoritesTab(
     onSongLongPress: (Song) -> Unit = {},
     onSongSelectionToggle: (Song) -> Unit = {},
     getSelectionIndex: (String) -> Int? = { null },
+    sortOption: SortOption,
     onLocateCurrentSongVisibilityChanged: (Boolean) -> Unit = {},
     onRegisterLocateCurrentSongAction: ((() -> Unit)?) -> Unit = {},
-    storageFilter: StorageFilter = StorageFilter.ALL
+    storageFilter: StorageFilter = StorageFilter.ALL,
+    hasCurrentSong: Boolean = false
 ) {
-    val stablePlayerState by playerViewModel.stablePlayerState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     val visibilityCallback by rememberUpdatedState(onLocateCurrentSongVisibilityChanged)
     val registerActionCallback by rememberUpdatedState(onRegisterLocateCurrentSongAction)
-    val currentSongId = stablePlayerState.currentSong?.id
+    var lastHandledFavoriteSortKey by remember { mutableStateOf(sortOption.storageKey) }
+    var pendingFavoriteSortScrollReset by remember { mutableStateOf(false) }
+    var favoriteSortSawRefreshLoading by remember { mutableStateOf(false) }
+    val currentSongId by remember(playerViewModel) {
+        playerViewModel.stablePlayerState
+            .map { it.currentSong?.id }
+            .distinctUntilChanged()
+    }.collectAsStateWithLifecycle(initialValue = null)
 
     val currentSongListIndex = remember(favoriteSongs.itemCount, currentSongId) {
         if (currentSongId == null) -1
@@ -107,6 +119,26 @@ fun LibraryFavoritesTab(
 
     LaunchedEffect(locateCurrentSongAction) {
         registerActionCallback(locateCurrentSongAction)
+    }
+
+    LaunchedEffect(sortOption) {
+        val currentSortKey = sortOption.storageKey
+        if (currentSortKey == lastHandledFavoriteSortKey) return@LaunchedEffect
+        lastHandledFavoriteSortKey = currentSortKey
+        pendingFavoriteSortScrollReset = true
+        favoriteSortSawRefreshLoading = false
+        listState.scrollToItem(0)
+    }
+
+    LaunchedEffect(favoriteSongs.loadState.refresh, pendingFavoriteSortScrollReset) {
+        if (!pendingFavoriteSortScrollReset) return@LaunchedEffect
+        if (favoriteSongs.loadState.refresh is LoadState.Loading) {
+            favoriteSortSawRefreshLoading = true
+            return@LaunchedEffect
+        }
+        if (!favoriteSortSawRefreshLoading) return@LaunchedEffect
+        listState.scrollToItem(0)
+        pendingFavoriteSortScrollReset = false
     }
 
     LaunchedEffect(currentSongListIndex, favoriteSongs.itemCount, listState) {
@@ -185,12 +217,9 @@ fun LibraryFavoritesTab(
                         ) { index ->
                             val song = favoriteSongs[index]
                             if (song != null) {
-                                val isPlayingThisSong =
-                                    song.id == stablePlayerState.currentSong?.id && stablePlayerState.isPlaying
-                                EnhancedSongListItem(
+                                LibraryPlaybackAwareSongItem(
                                     song = song,
-                                    isCurrentSong = stablePlayerState.currentSong?.id == song.id,
-                                    isPlaying = isPlayingThisSong,
+                                    playerViewModel = playerViewModel,
                                     onMoreOptionsClick = { onMoreOptionsClick(song) },
                                     isSelected = selectedSongIds.contains(song.id),
                                     selectionIndex = if (isSelectionMode) getSelectionIndex(song.id) else null,
@@ -221,7 +250,7 @@ fun LibraryFavoritesTab(
                         }
                     }
 
-                    val bottomPadding = if (stablePlayerState.currentSong != null && stablePlayerState.currentSong != Song.emptySong())
+                    val bottomPadding = if (hasCurrentSong)
                         bottomBarHeight + MiniPlayerHeight + 16.dp
                     else
                         bottomBarHeight + 16.dp
